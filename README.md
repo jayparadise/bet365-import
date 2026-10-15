@@ -1,9 +1,16 @@
 # bet365 → DST Data Entry import
 
-Static page + Vercel functions. No build step.
+Static page + Vercel functions, no build step. Traders: team password (once per browser) → league → drop bet365 "Webpage, Complete" saves → Import.
 
-Deploy: `vercel deploy --prod` from this folder (or drag the folder into a new Vercel project).
+## Environment variables (Vercel → Settings → Environment Variables, all environments)
+- `DE_USERNAME` / `DE_PASSWORD` — the data-entry account the app saves as (a dedicated import user).
+- `APP_PASSWORD` — the shared team password for this page. Leave unset only if the page should be open.
+- `BLOB_READ_WRITE_TOKEN` — injected automatically when a Blob store is connected (aliases + import log).
 
-Storage: create a **Blob** store (private) in the Vercel dashboard (Storage → Create → Blob) and connect it to this project — that injects `BLOB_READ_WRITE_TOKEN`. Aliases and the import log live there as small JSON files. No other env vars needed.
+Redeploy after changing environment variables.
 
-Traders log in with their data-entry username/password; the token is kept in an httpOnly cookie and every save is attributed to them.
+## Behaviour
+- Players are matched by exact or unambiguous partial name (plus any stored alias); anything else is skipped and listed.
+- Games already COMPLETE in the app: only empty cells are filled.
+- Games are marked completed only when all five tabs were provided.
+- Every game is re-read after saving and any mismatch is reported.

@@ -59,19 +59,19 @@
   <h1>bet365 → Data Entry import</h1>
   <span class="muted" id="who"></span>
   <span class="sp"></span>
+  <input type="text" id="trader" placeholder="your name (for the log)" class="hidden" style="width:190px">
   <button id="btnRuns" class="hidden">Recent imports</button>
   <button id="btnLogout" class="hidden">Log out</button>
 </header>
 <main>
   <section class="card" id="loginCard">
-    <h2>Log in with your data-entry account</h2>
+    <h2>Team password</h2>
     <form id="loginForm" class="row">
-      <input type="text" id="u" placeholder="username" autocomplete="username" required>
-      <input type="password" id="p" placeholder="password" autocomplete="current-password" required>
-      <button class="primary" type="submit">Log in</button>
+      <input type="password" id="p" placeholder="team password" autocomplete="current-password" required>
+      <button class="primary" type="submit">Continue</button>
       <span id="loginErr" class="err"></span>
     </form>
-    <p class="muted" style="margin:10px 0 0">Your saves are attributed to you, exactly as manual entry is. Your password is only forwarded to the data-entry app's own login.</p>
+    <p class="muted" style="margin:10px 0 0">Remembered on this browser for 30 days. Saves go into the data-entry app under the shared import account.</p>
   </section>
 
   <section class="card hidden" id="leagueCard">
@@ -92,25 +92,16 @@
     <div id="tabs" style="margin-top:10px"></div>
     <div id="fileErr" class="err"></div>
     <div class="row" style="margin-top:10px">
-      <button id="btnMatch" class="primary" disabled>Match games and players →</button>
+      <button id="btnMatch" class="primary" disabled>Continue →</button>
       <button id="btnClearFiles">Clear files</button>
     </div>
   </section>
 
   <section class="card hidden" id="reviewCard">
-    <h2><span class="step">3</span> Review matches</h2>
-    <div class="row legend" style="margin-bottom:8px">
-      <span><i class="sw" style="background:#fff"></i>exact</span>
-      <span><i class="sw" style="background:#eff6ff"></i>alias / your pick</span>
-      <span><i class="sw" style="background:var(--warnbg)"></i>token / fuzzy — check the pairing</span>
-      <span><i class="sw" style="background:var(--badbg)"></i>not found — pick from the roster or leave skipped</span>
-      <span class="sp"></span>
-      <label><input type="checkbox" id="optComplete"> Mark games completed <span class="muted" id="optCompleteNote"></span></label>
-    </div>
-    <div id="summary" class="row" style="margin-bottom:8px"></div>
-    <div id="games"></div>
-    <div class="row" style="margin-top:10px">
-      <button id="btnRun" class="primary">Run import</button>
+    <h2><span class="step">3</span> Import</h2>
+    <p class="muted" style="margin:0 0 10px">Players are matched to the app rosters automatically (exact name or unambiguous partial name). Anything else is skipped and listed in the result. Games already COMPLETE in the app get empty cells filled only. Games are marked completed only when all five tabs were provided.</p>
+    <div class="row">
+      <button id="btnRun" class="primary">Import now</button>
       <span id="runNote" class="muted"></span>
     </div>
   </section>
@@ -133,14 +124,14 @@
 import { FIELDS, FIELD_LABELS, TABS, parseBet365Html, buildRows, norm, makeResolver, matchFixture, same } from './lib.js';
 
 const $ = id => document.getElementById(id);
-const S = { user: null, leagues: [], league: '', fixtures: [], files: {}, rows: {}, aliases: { player: {}, team: {} }, games: [], allFive: false };
+const S = { protected: false, serviceUser: null, leagues: [], league: '', fixtures: [], files: {}, rows: {}, aliases: { player: {}, team: {} }, games: [], allFive: false };
 const LEAGUE_NAMES = { mls: 'MLS', laliga: 'La Liga', dfl: 'Bundesliga (DFL)', epl: 'Premier League', seriea: 'Serie A', lig: 'Ligue 1', ere: 'Eredivisie', por: 'Primeira Liga', tur: 'Süper Lig', mxa: 'Liga MX', brz: 'Brasileirão', liber: 'Libertadores', ucl: 'Champions League', eurl: 'Europa League' };
 
 function toast(msg, ms = 2500) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
 async function api(path, opts = {}) {
   const r = await fetch(path, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (r.status === 401) { showLogin(j.error || 'Please log in'); throw new Error(j.error || 'not logged in'); }
+  if (r.status === 401) { showLogin(/wrong/i.test(j.error || '') ? j.error : ''); throw new Error(j.error || 'team password required'); }
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
@@ -160,25 +151,29 @@ const isComplete = f => /complet/i.test(f?.progress?.status || '');
 // ---------- auth ----------
 function showLogin(err) {
   $('loginCard').classList.remove('hidden');
-  for (const id of ['leagueCard', 'filesCard', 'reviewCard', 'runCard', 'btnLogout', 'btnRuns']) $(id).classList.add('hidden');
+  for (const id of ['leagueCard', 'filesCard', 'reviewCard', 'runCard', 'btnLogout', 'btnRuns', 'trader']) $(id).classList.add('hidden');
   $('loginErr').textContent = err || '';
   $('who').textContent = '';
 }
 function showApp() {
   $('loginCard').classList.add('hidden');
-  for (const id of ['leagueCard', 'filesCard', 'btnLogout', 'btnRuns']) $(id).classList.remove('hidden');
-  $('who').textContent = S.user ? `${S.user.username} (${S.user.role})` : '';
+  for (const id of ['leagueCard', 'filesCard', 'btnRuns', 'trader']) $(id).classList.remove('hidden');
+  if (S.protected) $('btnLogout').classList.remove('hidden');
+  $('who').textContent = S.serviceUser ? `saving as ${S.serviceUser}` : '';
+  try { $('trader').value = localStorage.getItem('traderName') || ''; } catch {}
 }
+$('trader').onchange = () => { try { localStorage.setItem('traderName', $('trader').value.trim()); } catch {} };
+const traderName = () => ($('trader').value.trim() || S.serviceUser || 'trader');
 $('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   $('loginErr').textContent = '';
   try {
-    const { user } = await api('/api/login', { method: 'POST', body: { username: $('u').value.trim(), password: $('p').value } });
-    S.user = user; $('p').value = '';
-    showApp(); await loadLeagues();
+    await api('/api/login', { method: 'POST', body: { password: $('p').value } });
+    $('p').value = '';
+    await boot();
   } catch (err) { $('loginErr').textContent = err.message; }
 });
-$('btnLogout').onclick = async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); S.user = null; showLogin(''); };
+$('btnLogout').onclick = async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); showLogin(''); };
 
 // ---------- leagues & fixtures ----------
 async function loadLeagues() {
@@ -235,132 +230,36 @@ function renderTabs() {
   $('btnMatch').disabled = !(S.league && Object.keys(S.files).length);
 }
 
-// ---------- matching ----------
-$('btnMatch').onclick = async () => {
-  $('btnMatch').disabled = true;
-  try { await buildReview(); } catch (e) { toast('Error: ' + e.message, 6000); console.error(e); }
-  $('btnMatch').disabled = false;
-};
+// ---------- matching (automatic) ----------
+$('btnMatch').onclick = () => { $('reviewCard').classList.remove('hidden'); $('runCard').classList.add('hidden'); $('runNote').textContent = `${Object.keys(S.files).length} tab(s), ${S.allFive ? 'games will be marked completed' : 'games will stay open'}`; $('reviewCard').scrollIntoView({ behavior: 'smooth' }); };
 async function loadAliases() {
-  const { aliases } = await api(`/api/aliases?league=${encodeURIComponent(S.league)}`);
   S.aliases = { player: {}, team: {} };
-  for (const a of aliases) S.aliases[a.kind === 'team' ? 'team' : 'player'][norm(a.bet365_name)] = a.kind === 'team' ? a.app_name : a.app_id;
+  try { const r = await api(`/api/aliases?league=${encodeURIComponent(S.league)}`); for (const a of r.aliases || []) S.aliases[a.kind === 'team' ? 'team' : 'player'][norm(a.bet365_name)] = a.kind === 'team' ? a.app_name : a.app_id; }
+  catch (e) { /* aliases are optional */ }
 }
-async function buildReview() {
+async function prepare() {
   await loadAliases();
   const tabs = {}; for (const [t, f] of Object.entries(S.files)) tabs[t] = f.games;
   S.rows = buildRows(tabs);
-  // pair bet365 titles with fixtures
   const used = new Set();
   S.games = Object.keys(S.rows).sort().map(title => {
     const m = matchFixture(title, S.fixtures.filter(f => !used.has(f.id)), S.aliases.team);
     if (m.fixture) used.add(m.fixture.id);
-    return { title, fixture: m.fixture, score: m.score, candidates: m.candidates, rows: [], onlyEmpty: isComplete(m.fixture), roster: null };
+    return { title, fixture: m.fixture, rows: [], onlyEmpty: isComplete(m.fixture), roster: null };
   });
-  await loadRosters();
-  $('reviewCard').classList.remove('hidden'); $('runCard').classList.add('hidden');
-  $('optComplete').checked = S.allFive; $('optComplete').disabled = !S.allFive;
-  $('optCompleteNote').textContent = S.allFive ? '(all five tabs provided)' : '(needs all five tabs)';
-  renderReview();
-  $('reviewCard').scrollIntoView({ behavior: 'smooth' });
-}
-async function loadRosters() {
-  const need = S.games.filter(g => g.fixture && !g.roster);
-  if (!need.length) return;
+  const need = S.games.filter(g => g.fixture);
   const res = await gqlBatch(need.map(g => ({ operationName: 'GamePlayersDataEntry', variables: { gameId: g.fixture.id } })));
   need.forEach((g, i) => {
     if (res[i].error) { g.rosterError = res[i].error; return; }
     const d = res[i].data.gamePlayersDataEntry;
     g.roster = [...d.homeTeamPlayers, ...d.awayTeamPlayers];
-    g.appStatus = d.status;
-    resolveGame(g);
+    const r = makeResolver(g.roster, S.aliases.player);
+    g.rows = Object.entries(S.rows[g.title]).map(([name, vals]) => {
+      let [entries, how] = r.resolve(name);
+      if (how.startsWith('fuzzy')) { entries = null; how = 'none'; } // only exact / token / alias are trusted
+      return { name, vals, entries, how, skip: !entries };
+    });
   });
-}
-function resolveGame(g) {
-  const r = makeResolver(g.roster, S.aliases.player);
-  g.resolver = r;
-  g.rows = Object.entries(S.rows[g.title]).map(([name, vals]) => {
-    const [entries, how] = r.resolve(name);
-    return { name, vals, entries, how, skip: !entries };
-  });
-}
-function gameStats(g) {
-  const st = { matched: 0, exact: 0, alias: 0, token: 0, fuzzy: 0, none: 0, dupes: 0 };
-  for (const r of g.rows) {
-    if (r.skip || !r.entries) { st.none++; continue; }
-    st.matched++;
-    if (r.entries.length > 1) st.dupes++;
-    const k = r.how.split(' ')[0]; st[k === 'manual' ? 'alias' : k] = (st[k === 'manual' ? 'alias' : k] || 0) + 1;
-  }
-  return st;
-}
-function renderReview() {
-  const tot = { games: 0, matched: 0, none: 0, fuzzy: 0, nofix: 0 };
-  const html = S.games.map((g, gi) => {
-    const st = g.roster ? gameStats(g) : null;
-    if (g.fixture) tot.games++; else tot.nofix++;
-    if (st) { tot.matched += st.matched; tot.none += st.none; tot.fuzzy += st.fuzzy + st.token; }
-    const fixOpts = ['<option value="">— not in app (skip game) —</option>'].concat(
-      g.candidates.map(c => c.fixture).concat(S.fixtures.filter(f => !g.candidates.some(c => c.fixture.id === f.id)))
-        .map(f => `<option value="${f.id}" ${g.fixture?.id === f.id ? 'selected' : ''}>${esc(f.homeTeam.name)} v ${esc(f.awayTeam.name)} · ${esc(String(f.date).slice(0, 10))} · ${esc(f.progress.status)}</option>`)).join('');
-    const hd = `<div class="hd"><strong>${esc(g.title)}</strong> <span class="muted">→</span> <select data-g="${gi}" class="fixsel">${fixOpts}</select>
-      ${g.fixture ? `<span class="badge ${isComplete(g.fixture) ? 'complete' : 'nodata'}">${esc(g.fixture.progress.status)}</span>` : '<span class="chip bad">no fixture</span>'}
-      ${st ? `<span class="chip ok">${st.matched} matched</span>${st.fuzzy + st.token ? `<span class="chip warn">${st.fuzzy + st.token} check</span>` : ''}${st.none ? `<span class="chip bad">${st.none} not found</span>` : ''}${st.dupes ? `<span class="chip warn">${st.dupes} dupes (both filled)</span>` : ''}` : ''}
-      ${g.rosterError ? `<span class="err">${esc(g.rosterError)}</span>` : ''}
-      <span class="sp"></span>
-      ${g.fixture ? `<label title="Keep any value already in the app; only fill empty cells"><input type="checkbox" class="onlyempty" data-g="${gi}" ${g.onlyEmpty ? 'checked' : ''}> fill empty cells only</label>` : ''}
-      <button class="toggle" data-g="${gi}">${g.collapsed ? 'show' : 'hide'}</button></div>`;
-    let body = '';
-    if (g.roster) {
-      const rosterOpts = g.roster.slice().sort((a, b) => a.team.abbreviation.localeCompare(b.team.abbreviation) || a.player.name.localeCompare(b.player.name));
-      body = `<table><tr><th>bet365</th><th>app player</th><th>how</th>${FIELD_LABELS.map(l => `<th style="text-align:right">${l}</th>`).join('')}<th>in app now</th></tr>` +
-        g.rows.map((r, ri) => {
-          const cls = r.skip ? 'skip' : r.how.split(' ')[0];
-          const cur = r.entries?.[0];
-          const curVals = cur && FIELDS.some(f => cur[f] != null) ? FIELDS.map(f => fmt(cur[f])).join(' / ') : '';
-          const sel = `<select data-g="${gi}" data-r="${ri}" class="plsel"><option value="">— skip —</option>` +
-            rosterOpts.map(p => `<option value="${p.player.id}" ${!r.skip && r.entries?.some(e => e.player.id === p.player.id) ? 'selected' : ''}>${esc(p.player.name)} (${esc(p.team.abbreviation)}${p.player.isActive ? '' : ', inactive'})</option>`).join('') + '</select>';
-          return `<tr class="${cls}"><td>${esc(r.name)}</td><td>${sel}</td><td><span class="muted">${esc(r.skip ? 'skipped' : r.how)}</span></td>${r.vals.map(v => `<td class="num">${fmt(v)}</td>`).join('')}<td class="muted">${esc(curVals)}</td></tr>`;
-        }).join('') + '</table>';
-    } else if (g.fixture) body = '<p class="muted">loading roster…</p>';
-    return `<div class="game ${g.collapsed ? 'collapsed' : ''}">${hd}<div class="body">${body}</div></div>`;
-  }).join('');
-  $('games').innerHTML = html;
-  $('summary').innerHTML = `<span class="chip">${tot.games} games paired</span>${tot.nofix ? `<span class="chip bad">${tot.nofix} bet365 games not in app</span>` : ''}<span class="chip ok">${tot.matched} players matched</span>${tot.fuzzy ? `<span class="chip warn">${tot.fuzzy} to check</span>` : ''}${tot.none ? `<span class="chip bad">${tot.none} not found</span>` : ''}`;
-  $('btnRun').disabled = !tot.games;
-  for (const el of document.querySelectorAll('.fixsel')) el.onchange = onFixtureChange;
-  for (const el of document.querySelectorAll('.plsel')) el.onchange = onPlayerChange;
-  for (const el of document.querySelectorAll('.onlyempty')) el.onchange = e => { S.games[+e.target.dataset.g].onlyEmpty = e.target.checked; };
-  for (const el of document.querySelectorAll('.toggle')) el.onclick = e => { const g = S.games[+e.target.dataset.g]; g.collapsed = !g.collapsed; renderReview(); };
-}
-async function onFixtureChange(e) {
-  const g = S.games[+e.target.dataset.g];
-  const id = e.target.value;
-  g.fixture = S.fixtures.find(f => f.id === id) || null;
-  g.roster = null; g.rows = []; g.rosterError = null; g.onlyEmpty = isComplete(g.fixture);
-  if (g.fixture) {
-    const [h, a] = g.title.split(' v ').map(s => s.trim());
-    const by = S.user?.username;
-    api('/api/aliases', { method: 'POST', body: { league: S.league, kind: 'team', bet365Name: h, appId: g.fixture.homeTeam.name, appName: g.fixture.homeTeam.name, createdBy: by } }).catch(() => {});
-    api('/api/aliases', { method: 'POST', body: { league: S.league, kind: 'team', bet365Name: a, appId: g.fixture.awayTeam.name, appName: g.fixture.awayTeam.name, createdBy: by } }).catch(() => {});
-    S.aliases.team[norm(h)] = g.fixture.homeTeam.name; S.aliases.team[norm(a)] = g.fixture.awayTeam.name;
-    renderReview();
-    await loadRosters();
-  }
-  renderReview();
-}
-async function onPlayerChange(e) {
-  const g = S.games[+e.target.dataset.g], r = g.rows[+e.target.dataset.r];
-  const id = e.target.value;
-  if (!id) { r.skip = true; r.entries = null; r.how = 'none'; renderReview(); return; }
-  const p = g.resolver.byId[id];
-  r.entries = g.resolver.byNorm[norm(p.player.name)]; r.skip = false; r.how = 'manual';
-  S.aliases.player[norm(r.name)] = id;
-  try {
-    await api('/api/aliases', { method: 'POST', body: { league: S.league, kind: 'player', bet365Name: r.name, appId: id, appName: p.player.name, createdBy: S.user?.username } });
-    toast(`Saved alias: ${r.name} → ${p.player.name}`);
-  } catch (err) { toast('Alias not saved: ' + err.message, 5000); }
-  renderReview();
 }
 
 // ---------- run ----------
@@ -370,11 +269,15 @@ $('btnRun').onclick = async () => {
   $('btnRun').disabled = false;
 };
 async function runImport() {
-  const games = S.games.filter(g => g.fixture && g.roster);
-  const markComplete = $('optComplete').checked && S.allFive;
-  $('runCard').classList.remove('hidden'); $('report').innerHTML = ''; $('prog').max = games.length; $('prog').value = 0;
+  $('runCard').classList.remove('hidden'); $('report').innerHTML = ''; $('prog').value = 0; $('prog').max = 1;
+  $('runStatus').textContent = 'Matching games and players…';
   $('runCard').scrollIntoView({ behavior: 'smooth' });
+  await prepare();
+  const games = S.games.filter(g => g.fixture && g.roster);
+  const markComplete = S.allFive;
+  $('prog').max = games.length;
   const report = [];
+  for (const g of S.games.filter(g => !g.fixture || g.rosterError)) report.push({ game: g.title, title: g.title, matched: 0, unchanged: 0, saved: 0, errors: [g.rosterError || 'no matching fixture in the app — skipped'], verifyOk: 0, mismatches: [], completed: false, skipped: [], dupes: [], outOfRange: 0 });
   for (const g of games) {
     const rep = { game: `${g.fixture.homeTeam.name} v ${g.fixture.awayTeam.name}`, title: g.title, matched: 0, unchanged: 0, saved: 0, errors: [], verifyOk: 0, mismatches: [], completed: false, skipped: g.rows.filter(r => r.skip).map(r => r.name), dupes: [], outOfRange: 0 };
     $('runStatus').textContent = `Saving ${rep.game}…`;
@@ -411,9 +314,9 @@ async function runImport() {
     $('prog').value = report.length;
     renderReport(report, false);
   }
-  $('runStatus').textContent = `Done — ${report.reduce((a, r) => a + r.saved, 0)} rows saved across ${report.length} games.`;
+  $('runStatus').textContent = `Done — ${report.reduce((a, r) => a + r.saved, 0)} rows saved across ${games.length} games${markComplete ? ', games marked completed' : ' (games left open: not all five tabs provided)'}.`;
   renderReport(report, true);
-  api('/api/runs', { method: 'POST', body: { league: S.league, username: S.user?.username, summary: { tabs: Object.keys(S.files), games: report.map(r => ({ game: r.game, matched: r.matched, saved: r.saved, unchanged: r.unchanged, verifyOk: r.verifyOk, mismatches: r.mismatches.length, errors: r.errors.length, completed: r.completed, skipped: r.skipped.length })) } } }).catch(() => {});
+  api('/api/runs', { method: 'POST', body: { league: S.league, username: traderName(), summary: { tabs: Object.keys(S.files), games: report.map(r => ({ game: r.game, matched: r.matched, saved: r.saved, unchanged: r.unchanged, verifyOk: r.verifyOk, mismatches: r.mismatches.length, errors: r.errors.length, completed: r.completed, skipped: r.skipped.length })) } } }).catch(() => {});
   loadLeagues().catch(() => {});
 }
 function renderReport(report, done) {
@@ -435,10 +338,16 @@ $('btnRuns').onclick = async () => {
 $('btnRunsClose').onclick = () => $('runsCard').classList.add('hidden');
 
 // ---------- boot ----------
-(async () => {
-  try { const { user } = await api('/api/me'); S.user = user; showApp(); await loadLeagues(); }
-  catch { showLogin(''); }
-})();
+async function boot() {
+  try {
+    const me = await api('/api/me');
+    S.protected = me.protected; S.serviceUser = me.serviceUser;
+    showApp(); await loadLeagues();
+  } catch (e) {
+    if (!/log in|password/i.test(e.message)) toast(e.message, 10000);
+  }
+}
+boot();
 </script>
 </body>
 </html>

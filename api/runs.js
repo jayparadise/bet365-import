@@ -1,9 +1,9 @@
-import { requireToken, readJson, writeJson } from './_shared.js';
+import { requireSession, readJson, writeJson } from './_shared.js';
 
 const PATH = 'runs/index.json';
 // GET -> { runs } (newest first, last 200 kept); POST { league, username, summary } -> append
 export default async function handler(req, res) {
-  const token = requireToken(req, res); if (!token) return;
+  if (!requireSession(req, res)) return;
   try {
     if (req.method === 'GET') {
       const runs = await readJson(PATH, []);

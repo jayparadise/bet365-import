@@ -24,7 +24,7 @@ export async function gql(token, operationName, variables) {
   return j.data;
 }
 
-export function readCookie(req, name = COOKIE) {
+export function readCookie(req, name) {
   const raw = req.headers.cookie || '';
   for (const part of raw.split(';')) {
     const [k, ...v] = part.trim().split('=');
@@ -32,15 +32,46 @@ export function readCookie(req, name = COOKIE) {
   }
   return null;
 }
-
-export function cookieHeader(value, maxAge) {
-  return `${COOKIE}=${encodeURIComponent(value)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
+export function cookieHeader(name, value, maxAge) {
+  return `${name}=${encodeURIComponent(value)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAge}`;
 }
 
-export function requireToken(req, res) {
-  const t = readCookie(req);
-  if (!t) { res.status(401).json({ error: 'not logged in' }); return null; }
-  return t;
+// ---- team password gate (APP_PASSWORD). Unset = page is open. ----
+import { createHmac, timingSafeEqual } from 'node:crypto';
+export const SESSION_COOKIE = 'app_session';
+export const isProtected = () => Boolean(process.env.APP_PASSWORD);
+export const sessionValue = () => createHmac('sha256', process.env.APP_PASSWORD).update('bet365-import-session-v1').digest('hex');
+export function checkPassword(pw) {
+  const want = Buffer.from(String(process.env.APP_PASSWORD || '')), got = Buffer.from(String(pw || ''));
+  return want.length > 0 && want.length === got.length && timingSafeEqual(want, got);
+}
+export function requireSession(req, res) {
+  if (!isProtected()) return true;
+  const c = readCookie(req, SESSION_COOKIE);
+  const want = sessionValue();
+  if (c && c.length === want.length && timingSafeEqual(Buffer.from(c), Buffer.from(want))) return true;
+  res.status(401).json({ error: 'team password required' });
+  return false;
+}
+
+// ---- data-entry service account (DE_USERNAME / DE_PASSWORD), token cached per function instance ----
+let svc = { token: null, at: 0, username: null };
+export async function serviceToken(force = false) {
+  if (!force && svc.token && Date.now() - svc.at < 8 * 3600 * 1000) return svc.token;
+  const username = process.env.DE_USERNAME, password = process.env.DE_PASSWORD;
+  if (!username || !password) throw new Error('DE_USERNAME / DE_PASSWORD not configured in Vercel');
+  const d = await gql(null, 'Login', { input: { username, password } });
+  svc = { token: d.login.accessToken, at: Date.now(), username: d.login.user?.username || username };
+  return svc.token;
+}
+export const serviceUsername = () => svc.username || process.env.DE_USERNAME || null;
+// Run one data-entry operation as the service account, re-logging in once if the token was rejected.
+export async function svcGql(operationName, variables) {
+  try { return await gql(await serviceToken(), operationName, variables); }
+  catch (e) {
+    if (/unauth|jwt|token|expired|forbidden/i.test(String(e.message))) return gql(await serviceToken(true), operationName, variables);
+    throw e;
+  }
 }
 
 import { get, put } from '@vercel/blob';

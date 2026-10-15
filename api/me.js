@@ -1,11 +1,12 @@
-import { gql, readCookie } from './_shared.js';
+import { requireSession, serviceToken, serviceUsername, isProtected } from './_shared.js';
+
+// GET -> { protected, serviceUser } ; 401 when the team password cookie is missing
 export default async function handler(req, res) {
-  const token = readCookie(req);
-  if (!token) return res.status(401).json({ error: 'not logged in' });
+  if (!requireSession(req, res)) return;
   try {
-    const d = await gql(token, 'Me', {});
-    return res.status(200).json({ user: d.me });
+    await serviceToken();
+    return res.status(200).json({ protected: isProtected(), serviceUser: serviceUsername() });
   } catch (e) {
-    return res.status(401).json({ error: String(e.message || e) });
+    return res.status(500).json({ error: 'Data-entry service account login failed: ' + String(e.message || e) });
   }
 }

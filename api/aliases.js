@@ -1,4 +1,4 @@
-import { requireToken, readJson, writeJson } from './_shared.js';
+import { requireSession, readJson, writeJson } from './_shared.js';
 
 const path = league => `aliases/${league.replace(/[^a-z0-9_-]/gi, '')}.json`;
 
@@ -6,12 +6,13 @@ const path = league => `aliases/${league.replace(/[^a-z0-9_-]/gi, '')}.json`;
 // POST { league, kind, bet365Name, appId, appName, createdBy } -> upsert (keyed by kind + bet365 name)
 // DELETE { league, kind, bet365Name }
 export default async function handler(req, res) {
-  const token = requireToken(req, res); if (!token) return;
+  if (!requireSession(req, res)) return;
   try {
     if (req.method === 'GET') {
       const league = String(req.query.league || '');
       if (!league) return res.status(400).json({ error: 'league required' });
-      return res.status(200).json({ aliases: await readJson(path(league), []) });
+      try { return res.status(200).json({ aliases: await readJson(path(league), []) }); }
+      catch (e) { if (/blob credentials|BLOB_READ_WRITE_TOKEN/i.test(String(e.message))) return res.status(200).json({ aliases: [], warning: 'Blob store not connected — aliases will not be saved' }); throw e; }
     }
     if (req.method === 'POST' || req.method === 'DELETE') {
       const { league, kind, bet365Name, appId, appName, createdBy } = req.body || {};

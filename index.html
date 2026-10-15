@@ -102,7 +102,7 @@
 
   <section class="card hidden" id="reviewCard">
     <h2><span class="step">3</span> Import</h2>
-    <p class="muted" style="margin:0 0 10px">Players are matched to the app rosters automatically (exact name or unambiguous partial name). Anything else is skipped and listed in the result. Games are marked completed only when all five tabs were provided.</p>
+    <p class="muted" style="margin:0 0 10px">Players are matched to the app rosters automatically (exact name or unambiguous partial name). Anything else is skipped and listed in the result. Games are marked completed only when every tab the league uses was provided (Tackles are not used for Eredivisie, Libertadores, Ligue 1, MLS, Liga MX, Primeira Liga and Süper Lig).</p>
     <p id="modeNote" style="margin:0 0 10px"></p>
     <div class="row">
       <button id="btnRun" class="primary">Import now</button>
@@ -129,6 +129,9 @@ import { FIELDS, FIELD_LABELS, TABS, parseBet365Html, buildRows, norm, makeResol
 
 const $ = id => document.getElementById(id);
 const S = { protected: false, serviceUser: null, leagues: [], league: '', fixtures: [], files: {}, rows: {}, aliases: { player: {}, team: {} }, games: [], allFive: false };
+// Leagues where DST does not offer player tackles: the Tackles tab is not required to mark games completed.
+const NO_TACKLES = new Set(['ere', 'liber', 'lig', 'mls', 'mxa', 'mxc', 'por', 'tur']);
+const requiredTabs = () => TABS.filter(t => !(t === 'Tackles' && NO_TACKLES.has(S.league)));
 const LEAGUE_NAMES = { mls: 'MLS', laliga: 'La Liga', dfl: 'Bundesliga (DFL)', epl: 'Premier League', seriea: 'Serie A', lig: 'Ligue 1', ere: 'Eredivisie', por: 'Primeira Liga', tur: 'Süper Lig', mxa: 'Liga MX', brz: 'Brasileirão', liber: 'Libertadores', ucl: 'Champions League', eurl: 'Europa League' };
 
 function toast(msg, ms = 2500) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
@@ -188,7 +191,7 @@ async function loadLeagues() {
   sel.innerHTML = '<option value="">— choose a league —</option>' + S.leagues.map(l => `<option value="${l}">${esc(LEAGUE_NAMES[l] || l)} (${by[l].length})</option>`).join('');
   if (S.league && by[S.league]) { sel.value = S.league; renderFixtures(); }
 }
-$('league').onchange = () => { S.league = $('league').value; renderFixtures(); $('btnMatch').disabled = !(S.league && Object.keys(S.files).length); };
+$('league').onchange = () => { S.league = $('league').value; renderFixtures(); renderTabs(); };
 $('btnRefresh').onclick = () => loadLeagues().then(() => toast('Fixtures refreshed'));
 function renderFixtures() {
   S.fixtures = (S.allFixtures?.[S.league] || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
@@ -219,13 +222,14 @@ async function addFiles(list) {
   renderTabs();
 }
 function renderTabs() {
-  const chips = TABS.map(t => S.files[t] ? `<span class="chip ok">✓ ${t} · ${S.files[t].games.length} games</span>` : `<span class="chip miss">${t} — not provided</span>`).join('');
-  const missing = TABS.filter(t => !S.files[t]);
+  const req = requiredTabs();
+  const chips = TABS.map(t => S.files[t] ? `<span class="chip ok">✓ ${t} · ${S.files[t].games.length} games</span>` : (req.includes(t) ? `<span class="chip miss">${t} — not provided</span>` : `<span class="chip miss">${t} — not used for this league</span>`)).join('');
+  const missing = req.filter(t => !S.files[t]);
   S.allFive = missing.length === 0;
   let note = '';
   if (Object.keys(S.files).length && missing.length) {
     const cols = [];
-    if (!S.files['Shots']) cols.push('Shots value and price'); if (!S.files['Shots On Target']) cols.push('0.5 SOT'); if (!S.files['Tackles']) cols.push('1.5 Tackles'); if (!S.files['Score or Assist']) cols.push('Assist and Goals'); if (!S.files['To Be Booked']) cols.push('Cards');
+    if (!S.files['Shots']) cols.push('Shots value and price'); if (!S.files['Shots On Target']) cols.push('0.5 SOT'); if (!S.files['Tackles'] && req.includes('Tackles')) cols.push('1.5 Tackles'); if (!S.files['Score or Assist']) cols.push('Assist and Goals'); if (!S.files['To Be Booked']) cols.push('Cards');
     note = `<div class="muted" style="margin-top:6px">${cols.join(', ')} will be left blank; games will <b>not</b> be marked completed.</div>`;
   }
   $('tabs').innerHTML = chips + note;
@@ -321,7 +325,7 @@ async function runImport() {
     $('prog').value = report.length;
     renderReport(report, false);
   }
-  $('runStatus').textContent = `Done — ${report.reduce((a, r) => a + r.saved, 0)} rows saved across ${games.length} games${markComplete ? ', games marked completed' : ' (games left open: not all five tabs provided)'}.`;
+  $('runStatus').textContent = `Done — ${report.reduce((a, r) => a + r.saved, 0)} rows saved across ${games.length} games${markComplete ? ', games marked completed' : ' (games left open: not all required tabs provided)'}.`;
   renderReport(report, true);
   api('/api/runs', { method: 'POST', body: { league: S.league, username: traderName(), summary: { tabs: Object.keys(S.files), games: report.map(r => ({ game: r.game, matched: r.matched, saved: r.saved, unchanged: r.unchanged, verifyOk: r.verifyOk, mismatches: r.mismatches.length, errors: r.errors.length, completed: r.completed, skipped: r.skipped.length })) } } }).catch(() => {});
   loadLeagues().catch(() => {});

@@ -1,6 +1,18 @@
 // Shared browser/Node logic for the bet365 -> DST data-entry importer.
 // parseBet365Html, buildRows, norm, dice, resolvePlayer, matchFixtures, the seven field names.
 
+// DST pricing-table prices for 0.5 Shots on Goal (lookup table, column "1"). bet365's 1+ SOT price is rounded DOWN
+// to the nearest of these (4.50 -> 4.00, 1.27 -> 1.25); above the top it is capped at the top, below the bottom it takes the bottom.
+export const SOT_GRID = [1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.08, 1.10, 1.12, 1.15, 1.18, 1.20, 1.25, 1.30, 1.35, 1.40, 1.45, 1.50, 1.60, 1.70, 1.80, 1.90, 2.00, 2.25, 2.50, 3.00, 4.00, 5.00, 6.00, 7.50];
+export function roundDownToGrid(price, grid = SOT_GRID) {
+  if (price == null) return null;
+  let best = null;
+  for (const g of grid) { if (g <= price + 1e-9) best = g; else break; }
+  return best ?? grid[0];
+}
+// Shots: pick the rung whose price is in this band (inclusive); otherwise the rung closest to 1.88.
+export const SHOTS_BAND = [1.88, 3.00];
+
 export const FIELDS = ['shots', 'shots1_5Price', 'shotsOnGoal0_5Price', 'tackles0_5Price', 'assistPrice', 'cards', 'goals'];
 export const FIELD_LABELS = ['Shots', 'Shots $', '0.5 SOT', '1.5 Tkl', 'Assist', 'Cards', 'Goals'];
 export const TABS = ['Shots', 'Shots On Target', 'Tackles', 'Score or Assist', 'To Be Booked'];
@@ -100,19 +112,19 @@ export function buildRows(tabs) {
     const g = (byTitle[title] ??= {});
     (g[name] ??= Array(7).fill(null))[i] = v ?? null;
   };
-  const closestTo188 = prices => {
-    let best = null;
-    prices.forEach((p, i) => {
-      if (p == null) return;
-      const d = Math.abs(p - 1.88);
-      if (!best || d < best.d) best = { d, i, p };
-    });
-    return best;
+  // Shots: the rung whose bet365 price sits between 1.88 and 3.00 (lowest such rung).
+  // If no rung is in that band, the rung whose price is closest to 1.88 (e.g. 1+ 1.57 / 2+ 3.50 -> 1+).
+  const pickShots = prices => {
+    const rungs = prices.map((p, i) => ({ p, i })).filter(x => x.p != null);
+    if (!rungs.length) return null;
+    const inBand = rungs.filter(x => x.p >= SHOTS_BAND[0] && x.p <= SHOTS_BAND[1]);
+    if (inBand.length) return inBand[0];
+    return rungs.reduce((a, b) => (Math.abs(b.p - 1.88) < Math.abs(a.p - 1.88) ? b : a));
   };
   for (const g of tabs['Shots'] ?? []) for (const [n, p] of Object.entries(g.rows)) {
-    const b = closestTo188(p); if (b) { put(g.title, n, 0, b.i + 0.5); put(g.title, n, 1, b.p); }
+    const b = pickShots(p); if (b) { put(g.title, n, 0, b.i + 0.5); put(g.title, n, 1, b.p); }
   }
-  for (const g of tabs['Shots On Target'] ?? []) for (const [n, p] of Object.entries(g.rows)) put(g.title, n, 2, p[0]);
+  for (const g of tabs['Shots On Target'] ?? []) for (const [n, p] of Object.entries(g.rows)) put(g.title, n, 2, roundDownToGrid(p[0]));
   for (const g of tabs['Tackles'] ?? []) for (const [n, p] of Object.entries(g.rows)) put(g.title, n, 3, p[1]);
   for (const g of tabs['Score or Assist'] ?? []) {
     const si = g.headers.indexOf('Score'), ai = g.headers.indexOf('Assist');

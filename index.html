@@ -92,6 +92,9 @@
     <div id="tabs" style="margin-top:10px"></div>
     <div id="fileErr" class="err"></div>
     <div class="row" style="margin-top:10px">
+      <label title="Unchecked: only empty cells are filled and values already in the app are kept. Checked: every matched player's values are replaced with the bet365 values."><input type="checkbox" id="optOverwrite"> Overwrite values already in the app</label>
+    </div>
+    <div class="row" style="margin-top:10px">
       <button id="btnMatch" class="primary" disabled>Continue →</button>
       <button id="btnClearFiles">Clear files</button>
     </div>
@@ -99,7 +102,8 @@
 
   <section class="card hidden" id="reviewCard">
     <h2><span class="step">3</span> Import</h2>
-    <p class="muted" style="margin:0 0 10px">Players are matched to the app rosters automatically (exact name or unambiguous partial name). Anything else is skipped and listed in the result. Games already COMPLETE in the app get empty cells filled only. Games are marked completed only when all five tabs were provided.</p>
+    <p class="muted" style="margin:0 0 10px">Players are matched to the app rosters automatically (exact name or unambiguous partial name). Anything else is skipped and listed in the result. Games are marked completed only when all five tabs were provided.</p>
+    <p id="modeNote" style="margin:0 0 10px"></p>
     <div class="row">
       <button id="btnRun" class="primary">Import now</button>
       <span id="runNote" class="muted"></span>
@@ -229,7 +233,12 @@ function renderTabs() {
 }
 
 // ---------- matching (automatic) ----------
-$('btnMatch').onclick = () => { $('reviewCard').classList.remove('hidden'); $('runCard').classList.add('hidden'); $('runNote').textContent = `${Object.keys(S.files).length} tab(s), ${S.allFive ? 'games will be marked completed' : 'games will stay open'}`; $('reviewCard').scrollIntoView({ behavior: 'smooth' }); };
+$('btnMatch').onclick = () => {
+  $('reviewCard').classList.remove('hidden'); $('runCard').classList.add('hidden');
+  $('runNote').textContent = `${Object.keys(S.files).length} tab(s), ${S.allFive ? 'games will be marked completed' : 'games will stay open'}`;
+  $('modeNote').innerHTML = $('optOverwrite').checked ? '<b class="err">Overwrite mode:</b> values already in the app will be replaced with the bet365 values for every matched player.' : '<b>Fill-empty mode:</b> values already in the app are kept; only empty cells are filled.';
+  $('reviewCard').scrollIntoView({ behavior: 'smooth' });
+};
 async function loadAliases() {
   S.aliases = { player: {}, team: {} };
   try { const r = await api(`/api/aliases?league=${encodeURIComponent(S.league)}`); for (const a of r.aliases || []) S.aliases[a.kind === 'team' ? 'team' : 'player'][norm(a.bet365_name)] = a.kind === 'team' ? a.app_name : a.app_id; }
@@ -243,7 +252,7 @@ async function prepare() {
   S.games = Object.keys(S.rows).sort().map(title => {
     const m = matchFixture(title, S.fixtures.filter(f => !used.has(f.id)), S.aliases.team);
     if (m.fixture) used.add(m.fixture.id);
-    return { title, fixture: m.fixture, rows: [], onlyEmpty: isComplete(m.fixture), roster: null };
+    return { title, fixture: m.fixture, rows: [], onlyEmpty: !$('optOverwrite').checked, roster: null };
   });
   const need = S.games.filter(g => g.fixture);
   const res = await gqlBatch(need.map(g => ({ operationName: 'GamePlayersDataEntry', variables: { gameId: g.fixture.id } })));

@@ -59,7 +59,6 @@
   <h1>bet365 → Data Entry import</h1>
   <span class="muted" id="who"></span>
   <span class="sp"></span>
-  <input type="text" id="trader" placeholder="your name (for the log)" class="hidden" style="width:190px">
   <button id="btnRuns" class="hidden">Recent imports</button>
   <button id="btnLogout" class="hidden">Log out</button>
 </header>
@@ -151,19 +150,17 @@ const isComplete = f => /complet/i.test(f?.progress?.status || '');
 // ---------- auth ----------
 function showLogin(err) {
   $('loginCard').classList.remove('hidden');
-  for (const id of ['leagueCard', 'filesCard', 'reviewCard', 'runCard', 'btnLogout', 'btnRuns', 'trader']) $(id).classList.add('hidden');
+  for (const id of ['leagueCard', 'filesCard', 'reviewCard', 'runCard', 'btnLogout', 'btnRuns']) $(id).classList.add('hidden');
   $('loginErr').textContent = err || '';
   $('who').textContent = '';
 }
 function showApp() {
   $('loginCard').classList.add('hidden');
-  for (const id of ['leagueCard', 'filesCard', 'btnRuns', 'trader']) $(id).classList.remove('hidden');
+  for (const id of ['leagueCard', 'filesCard', 'btnRuns']) $(id).classList.remove('hidden');
   if (S.protected) $('btnLogout').classList.remove('hidden');
   $('who').textContent = S.serviceUser ? `saving as ${S.serviceUser}` : '';
-  try { $('trader').value = localStorage.getItem('traderName') || ''; } catch {}
 }
-$('trader').onchange = () => { try { localStorage.setItem('traderName', $('trader').value.trim()); } catch {} };
-const traderName = () => ($('trader').value.trim() || S.serviceUser || 'trader');
+const traderName = () => (S.serviceUser || 'import');
 $('loginForm').addEventListener('submit', async e => {
   e.preventDefault();
   $('loginErr').textContent = '';

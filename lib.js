@@ -10,7 +10,7 @@ export function roundDownToGrid(price, grid = SOT_GRID) {
   for (const g of grid) { if (g <= price + 1e-9) best = g; else break; }
   return best ?? grid[0];
 }
-// Shots: pick the rung whose price is in this band (inclusive); otherwise the rung closest to 1.88.
+// Shots: pick the rung whose price is in this band (inclusive); otherwise the rung closest to 1.88 in implied probability.
 export const SHOTS_BAND = [1.88, 3.00];
 
 export const FIELDS = ['shots', 'shots1_5Price', 'shotsOnGoal0_5Price', 'tackles0_5Price', 'assistPrice', 'cards', 'goals'];
@@ -113,13 +113,16 @@ export function buildRows(tabs) {
     (g[name] ??= Array(7).fill(null))[i] = v ?? null;
   };
   // Shots: the rung whose bet365 price sits between 1.88 and 3.00 (lowest such rung).
-  // If no rung is in that band, the rung whose price is closest to 1.88 (e.g. 1+ 1.57 / 2+ 3.50 -> 1+).
+  // If no rung is in that band, the rung closest to 1.88 in implied probability (1/price), which favours the
+  // price above the band when the one below is a heavy favourite: 1+ 1.57 / 2+ 3.50 -> 1+ (64% vs 29%, 53% target);
+  // 1+ 1.20 / 2+ 3.10 -> 2+ (83% vs 32%).
   const pickShots = prices => {
     const rungs = prices.map((p, i) => ({ p, i })).filter(x => x.p != null);
     if (!rungs.length) return null;
     const inBand = rungs.filter(x => x.p >= SHOTS_BAND[0] && x.p <= SHOTS_BAND[1]);
     if (inBand.length) return inBand[0];
-    return rungs.reduce((a, b) => (Math.abs(b.p - 1.88) < Math.abs(a.p - 1.88) ? b : a));
+    const d = x => Math.abs(1 / x.p - 1 / 1.88);
+    return rungs.reduce((a, b) => (d(b) < d(a) ? b : a));
   };
   for (const g of tabs['Shots'] ?? []) for (const [n, p] of Object.entries(g.rows)) {
     const b = pickShots(p); if (b) { put(g.title, n, 0, b.i + 0.5); put(g.title, n, 1, b.p); }

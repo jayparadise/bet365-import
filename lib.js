@@ -9,6 +9,12 @@ const clean = s => (s || '').replace(/\s+/g, ' ').trim();
 const price = s => (/^\d+\.\d+$/.test(s) ? Number(s) : null);
 
 // Parse one "Webpage, Complete" save of a bet365 Weekend player-props tab.
+// Structure-based (bet365's class names are obfuscated and differ between site builds):
+//  - a game title is a leaf element whose text is "Home v Away"
+//  - a ladder / Score-or-Assist table is the group of sibling columns whose classes contain "rgl-Market-pwidth";
+//    the pwidth40 column holds the names (one child per player after a header), the others [header, cell per player]
+//  - a To Be Booked list is elements holding a name leaf + a price leaf, outside any pwidth column
+//  - each table / pair belongs to the nearest preceding title in document order
 // Returns { tab, games: [{ title, headers, rows: { bet365Name: [prices] } }] }
 export function parseBet365Html(htmlText, Parser) {
   const doc = new Parser().parseFromString(htmlText, 'text/html');
@@ -17,58 +23,73 @@ export function parseBet365Html(htmlText, Parser) {
     const t = clean(b.textContent).replace(/^(.+?)\1$/, '$1'); // label is repeated in two spans
     if (TABS.includes(t)) { tab = t; break; }
   }
-  const games = [];
-  for (const t of doc.querySelectorAll('div[class*="rrc-709"]')) {
-    const title = clean(t.textContent);
-    if (!title.includes(' v ')) continue;
-    const card = t.closest('div[class*="rrc-e6"]');
-    if (!card) continue;
-    const rows = {};
-    const add = (name, prices) => {
-      const old = rows[name];
-      if (!old) { rows[name] = prices; return; }
-      const n = Math.max(old.length, prices.length);
-      rows[name] = Array.from({ length: n }, (_, i) => old[i] ?? prices[i] ?? null);
-    };
-    const pc40 = card.querySelector('div[class*="rgl-Market-pwidth40"]');
-    const pcols = [...card.querySelectorAll('div[class*="rgl-Market-pwidth"]')].filter(d => !String(d.className).includes('pwidth40'));
-    const names = pc40 ? [...pc40.querySelectorAll('span[class*="rrd-f0"]')].map(x => clean(x.textContent)) : [];
-    if (pcols.length && names.length) {
-      const headers = [], cols = [];
-      for (const pc of pcols) {
-        const cells = [...pc.children];
-        headers.push(clean(cells[0]?.textContent));
-        cols.push(cells.slice(1).map(c => clean(c.textContent)));
-      }
-      if (cols.some(c => c.length !== names.length)) throw new Error(`${title}: column/name count mismatch (bet365 markup changed?)`);
-      const rung = headers.map(h => /^(\d+)\+$/.exec(h));
-      if (rung.every(Boolean)) {
-        const width = Math.max(...rung.map(m => Number(m[1])));
-        names.forEach((n, i) => {
-          const p = Array(width).fill(null);
-          rung.forEach((m, j) => { p[Number(m[1]) - 1] = price(cols[j][i]); });
-          add(n, p);
-        });
-      } else {
-        names.forEach((n, i) => add(n, cols.map(c => price(c[i]))));
-      }
-      games.push({ title, headers, rows });
+  const isTitle = s => / v /.test(s) && s.length < 80 && !/\d\.\d/.test(s);
+  const leaves = el => [...el.querySelectorAll('*')].filter(e => !e.children.length);
+  const before = (a, b) => (a.compareDocumentPosition(b) & 4) !== 0; // a precedes b
+  const titleEls = [...doc.querySelectorAll('div,span,h1,h2,h3,h4')].filter(e => !e.children.length && isTitle(clean(e.textContent)));
+  const nearestTitle = el => { let best = null; for (const t of titleEls) { if (before(t, el)) best = t; else break; } return best ? clean(best.textContent) : null; };
+
+  const games = {}; const order = [];
+  const game = title => { if (!games[title]) { games[title] = { title, headers: [], rows: {} }; order.push(title); } return games[title]; };
+  const add = (g, name, prices) => {
+    const old = g.rows[name];
+    if (!old) { g.rows[name] = prices; return; }
+    const n = Math.max(old.length, prices.length);
+    g.rows[name] = Array.from({ length: n }, (_, i) => old[i] ?? prices[i] ?? null);
+  };
+  const nameOf = row => { // the leaf with the most letters inside a participant row
+    let best = '', bl = 0;
+    for (const l of [row, ...leaves(row)]) { const t = clean(l.textContent); const n = (t.match(/[A-Za-z\u00C0-\u024F]/g) || []).length; if (!l.children.length && n > bl) { bl = n; best = t; } }
+    return best.replace(/^\d+\s*/, '').replace(/[\d\s]+$/, '').trim();
+  };
+
+  // ladder / score-assist tables
+  const seenGroups = new Set();
+  for (const pc40 of doc.querySelectorAll('[class*="rgl-Market-pwidth40"]')) {
+    const grp = pc40.parentElement; if (!grp || seenGroups.has(grp)) continue; seenGroups.add(grp);
+    const title = nearestTitle(grp); if (!title) continue;
+    // price columns are siblings of the name column, or nested in a sibling scroll wrapper (ladder tabs)
+    const pcols = [...grp.querySelectorAll('[class*="rgl-Market-pwidth"]')].filter(d => !/pwidth40/.test(d.className) && !d.parentElement.closest('[class*="rgl-Market-pwidth"]'));
+    const rowsEls = [...pc40.children].slice(1);
+    const names = rowsEls.map(nameOf);
+    if (!pcols.length || !names.length) continue;
+    const headers = [], cols = [];
+    for (const pc of pcols) {
+      const cells = [...pc.children];
+      headers.push(clean(cells[0]?.textContent));
+      cols.push(cells.slice(1).map(c => clean(c.textContent)));
+    }
+    if (cols.some(c => c.length !== names.length)) throw new Error(`${title}: column/name count mismatch (bet365 markup changed?)`);
+    const g = game(title); g.headers = headers;
+    const rung = headers.map(h => /^(\d+)\+$/.exec(h));
+    if (rung.every(Boolean)) {
+      const width = Math.max(...rung.map(m => Number(m[1])));
+      names.forEach((n, i) => { const p = Array(width).fill(null); rung.forEach((m, j) => { p[Number(m[1]) - 1] = price(cols[j][i]); }); add(g, n, p); });
     } else {
-      for (const d of card.querySelectorAll('div')) {
-        const ns = d.querySelector(':scope > span[class*="rgl-c1e976"]');
-        const ps = d.querySelector(':scope > span[class*="rgl-4a5de5"]');
-        if (ns && ps) add(clean(ns.textContent), [price(clean(ps.textContent))]);
-      }
-      games.push({ title, headers: ['booked'], rows });
+      names.forEach((n, i) => add(g, n, cols.map(c => price(c[i]))));
     }
   }
-  // Guess the tab from the headers when the selected button was not found.
-  if (!tab && games.length) {
-    const h = games[0].headers;
+
+  // booked-style list (name + price pairs), only when no table was found on the page
+  if (!order.length) {
+    for (const el of doc.querySelectorAll('div,li')) {
+      if (el.children.length < 2) continue;
+      const kids = [...el.children].filter(k => !k.children.length);
+      const nameEl = kids.find(k => /[A-Za-z]{3,}/.test(clean(k.textContent)) && !isTitle(clean(k.textContent)));
+      const priceEl = kids.find(k => /^\d+\.\d+$/.test(clean(k.textContent)));
+      if (!nameEl || !priceEl) continue;
+      const title = nearestTitle(el); if (!title) continue;
+      const g = game(title); g.headers = ['booked'];
+      add(g, clean(nameEl.textContent), [price(clean(priceEl.textContent))]);
+    }
+  }
+  const out = order.map(t => games[t]);
+  if (!tab && out.length) {
+    const h = out[0].headers;
     if (h[0] === 'booked') tab = 'To Be Booked';
     else if (h.includes('Score') || h.includes('Assist')) tab = 'Score or Assist';
   }
-  return { tab, games };
+  return { tab, games: out };
 }
 
 // Combine parsed tabs into the seven app values per player per game.

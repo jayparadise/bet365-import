@@ -60,6 +60,7 @@
   <span class="muted" id="who"></span>
   <span class="sp"></span>
   <a href="https://claude.ai/artifact/PUrbuwDwJK5dzGWgx84GTE" target="_blank" rel="noopener" id="btnHelp" class="hidden" style="text-decoration:none"><button type="button">Instructions</button></a>
+  <button id="btnMap" class="hidden">Name Mapping</button>
   <button id="btnRuns" class="hidden">Recent imports</button>
   <button id="btnLogout" class="hidden">Log out</button>
 </header>
@@ -117,6 +118,15 @@
     <div id="report"></div>
   </section>
 
+  <section class="card hidden" id="mapCard">
+    <h2>Name Mapping <button id="btnMapClose" style="margin-left:auto">close</button></h2>
+    <p class="muted" style="margin:0 0 10px">bet365 names that recent imports could not match. Pick the data-entry player once and every future import uses it. Choose <i>ignore</i> for players who are not in the app (they stop being reported as skipped).</p>
+    <div class="row" style="margin-bottom:10px"><select id="mapLeague"></select><span id="mapInfo" class="muted"></span></div>
+    <div id="mapUnmatched"></div>
+    <h3 style="font-size:14px;margin:18px 0 6px">Existing mappings</h3>
+    <div id="mapExisting"></div>
+  </section>
+
   <section class="card hidden" id="runsCard">
     <h2>Recent imports <button id="btnRunsClose" style="margin-left:auto">close</button></h2>
     <div id="runsList"></div>
@@ -158,13 +168,13 @@ const isComplete = f => /complet/i.test(f?.progress?.status || '');
 // ---------- auth ----------
 function showLogin(err) {
   $('loginCard').classList.remove('hidden');
-  for (const id of ['leagueCard', 'filesCard', 'reviewCard', 'runCard', 'btnLogout', 'btnRuns', 'btnHelp']) $(id).classList.add('hidden');
+  for (const id of ['leagueCard', 'filesCard', 'reviewCard', 'runCard', 'mapCard', 'btnLogout', 'btnRuns', 'btnHelp', 'btnMap']) $(id).classList.add('hidden');
   $('loginErr').textContent = err || '';
   $('who').textContent = '';
 }
 function showApp() {
   $('loginCard').classList.add('hidden');
-  for (const id of ['leagueCard', 'filesCard', 'btnRuns', 'btnHelp']) $(id).classList.remove('hidden');
+  for (const id of ['leagueCard', 'filesCard', 'btnRuns', 'btnHelp', 'btnMap']) $(id).classList.remove('hidden');
   if (S.protected) $('btnLogout').classList.remove('hidden');
   $('who').textContent = S.serviceUser ? `saving as ${S.serviceUser}` : '';
 }
@@ -290,7 +300,7 @@ async function runImport() {
   const report = [];
   for (const g of S.games.filter(g => !g.fixture || g.rosterError)) report.push({ game: g.title, title: g.title, matched: 0, unchanged: 0, saved: 0, errors: [g.rosterError || 'no matching fixture in the app — skipped'], verifyOk: 0, mismatches: [], completed: false, skipped: [], dupes: [], outOfRange: 0 });
   for (const g of games) {
-    const rep = { game: `${g.fixture.homeTeam.name} v ${g.fixture.awayTeam.name}`, title: g.title, matched: 0, unchanged: 0, saved: 0, errors: [], verifyOk: 0, mismatches: [], completed: false, skipped: g.rows.filter(r => r.skip).map(r => r.name), dupes: [], outOfRange: 0 };
+    const rep = { game: `${g.fixture.homeTeam.name} v ${g.fixture.awayTeam.name}`, title: g.title, matched: 0, unchanged: 0, saved: 0, errors: [], verifyOk: 0, mismatches: [], completed: false, skipped: g.rows.filter(r => r.skip && r.how !== 'ignored').map(r => r.name), dupes: [], outOfRange: 0 };
     $('runStatus').textContent = `Saving ${rep.game}…`;
     const inputs = [];
     for (const r of g.rows) {
@@ -329,12 +339,74 @@ async function runImport() {
   renderReport(report, true);
   api('/api/runs', { method: 'POST', body: { league: S.league, username: traderName(), summary: { tabs: Object.keys(S.files), games: report.map(r => ({ game: r.game, matched: r.matched, saved: r.saved, unchanged: r.unchanged, verifyOk: r.verifyOk, mismatches: r.mismatches.length, errors: r.errors.length, completed: r.completed, skipped: r.skipped.length })) } } }).catch(() => {});
   loadLeagues().catch(() => {});
+  // remember unmatched names for the Name Mapping page
+  const items = [];
+  for (const g of games) for (const r of g.rows) if (r.skip && r.how !== 'ignored') items.push({ name: r.name, gameId: g.fixture.id, game: `${g.fixture.homeTeam.name} v ${g.fixture.awayTeam.name}` });
+  if (items.length) api('/api/unmatched', { method: 'POST', body: { league: S.league, items } }).catch(() => {});
 }
 function renderReport(report, done) {
   $('report').innerHTML = `<table><tr><th>Game</th><th>Matched</th><th>Saved</th><th>Unchanged</th><th>Verified</th><th>Mismatch</th><th>Errors</th><th>Completed</th><th>Skipped names</th></tr>` +
     report.map(r => `<tr><td>${esc(r.game)}</td><td class="num">${r.matched}</td><td class="num">${r.saved}</td><td class="num">${r.unchanged}</td><td class="num ${r.mismatches.length ? 'err' : 'ok'}">${r.verifyOk}</td><td class="num ${r.mismatches.length ? 'err' : ''}">${r.mismatches.length}</td><td class="num ${r.errors.length ? 'err' : ''}">${r.errors.length}</td><td>${r.completed ? '<span class="ok">✓</span>' : '—'}</td><td style="white-space:normal" class="muted">${esc(r.skipped.join(', '))}${r.dupes.length ? ` <i>(dupes filled: ${esc(r.dupes.join(', '))})</i>` : ''}</td></tr>` +
       (r.errors.length || r.mismatches.length ? `<tr><td colspan="9" class="err" style="white-space:normal">${esc([...r.errors, ...r.mismatches].join(' · '))}</td></tr>` : '')).join('') + '</table>' +
     (done ? `<p class="muted">Out-of-range prices (over 20) accepted: ${report.reduce((a, r) => a + r.outOfRange, 0)}.</p>` : '');
+}
+
+// ---------- name mapping page ----------
+const M = { league: '', items: [], aliases: [], rosters: {} };
+$('btnMap').onclick = async () => {
+  $('mapLeague').innerHTML = S.leagues.map(l => `<option value="${l}" ${l === (S.league || M.league) ? 'selected' : ''}>${esc(LEAGUE_NAMES[l] || l)}</option>`).join('');
+  M.league = $('mapLeague').value;
+  $('mapCard').classList.remove('hidden'); $('mapCard').scrollIntoView({ behavior: 'smooth' });
+  await loadMapping();
+};
+$('btnMapClose').onclick = () => $('mapCard').classList.add('hidden');
+$('mapLeague').onchange = async () => { M.league = $('mapLeague').value; await loadMapping(); };
+async function loadMapping() {
+  $('mapUnmatched').innerHTML = '<p class="muted">loading…</p>'; $('mapExisting').innerHTML = '';
+  try {
+    const [u, a] = await Promise.all([api(`/api/unmatched?league=${encodeURIComponent(M.league)}`), api(`/api/aliases?league=${encodeURIComponent(M.league)}`)]);
+    M.aliases = (a.aliases || []).filter(x => x.kind === 'player');
+    const mapped = new Set(M.aliases.map(x => norm(x.bet365_name)));
+    M.items = (u.items || []).filter(x => !mapped.has(norm(x.name)));
+    // rosters for the games the unmatched names were seen in
+    const gameIds = [...new Set(M.items.map(x => x.gameId).filter(Boolean))].filter(id => !M.rosters[id]);
+    if (gameIds.length) {
+      const res = await gqlBatch(gameIds.map(id => ({ operationName: 'GamePlayersDataEntry', variables: { gameId: id } })));
+      gameIds.forEach((id, i) => { if (!res[i].error) { const d = res[i].data.gamePlayersDataEntry; M.rosters[id] = [...d.homeTeamPlayers, ...d.awayTeamPlayers].map(p => ({ id: p.player.id, name: p.player.name, team: p.team.abbreviation, active: p.player.isActive })).sort((x, y) => x.team.localeCompare(y.team) || x.name.localeCompare(y.name)); } });
+    }
+    renderMapping();
+  } catch (e) { $('mapUnmatched').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+function renderMapping() {
+  $('mapInfo').textContent = `${M.items.length} unmatched, ${M.aliases.length} mapped`;
+  $('mapUnmatched').innerHTML = M.items.length ? `<table><tr><th>bet365 name</th><th>seen in</th><th>data-entry player</th></tr>` + M.items.map((it, i) => {
+    const roster = M.rosters[it.gameId] || [];
+    const opts = `<option value="">— choose —</option><option value="IGNORE">— ignore (not in app) —</option>` + roster.map(p => `<option value="${p.id}" data-name="${esc(p.name)}">${esc(p.name)} (${esc(p.team)}${p.active ? '' : ', inactive'})</option>`).join('');
+    return `<tr><td>${esc(it.name)}</td><td class="muted">${esc(it.game || '')}</td><td><select class="mapsel" data-i="${i}">${opts}</select></td></tr>`;
+  }).join('') + '</table>' : '<p class="muted">Nothing to map — every name in recent imports matched or is already mapped.</p>';
+  $('mapExisting').innerHTML = M.aliases.length ? `<table><tr><th>bet365 name</th><th>data-entry player</th><th></th></tr>` + M.aliases.map((a, i) => `<tr><td>${esc(a.bet365_name)}</td><td>${a.app_id === 'IGNORE' ? '<i class="muted">ignored</i>' : esc(a.app_name || a.app_id)}</td><td><button class="mapdel" data-i="${i}">remove</button></td></tr>`).join('') + '</table>' : '<p class="muted">No mappings yet.</p>';
+  for (const el of document.querySelectorAll('.mapsel')) el.onchange = onMapPick;
+  for (const el of document.querySelectorAll('.mapdel')) el.onclick = onMapRemove;
+}
+async function onMapPick(e) {
+  const it = M.items[+e.target.dataset.i]; const id = e.target.value; if (!id) return;
+  const opt = e.target.selectedOptions[0]; const appName = id === 'IGNORE' ? null : opt.dataset.name;
+  e.target.disabled = true;
+  try {
+    await api('/api/aliases', { method: 'POST', body: { league: M.league, kind: 'player', bet365Name: it.name, appId: id, appName, createdBy: traderName() } });
+    await api('/api/unmatched', { method: 'DELETE', body: { league: M.league, names: [it.name] } });
+    M.aliases.push({ kind: 'player', bet365_name: it.name, app_id: id, app_name: appName });
+    M.items.splice(+e.target.dataset.i, 1);
+    toast(id === 'IGNORE' ? `${it.name} will be ignored` : `${it.name} → ${appName}`);
+    renderMapping();
+  } catch (err) { e.target.disabled = false; toast('Not saved: ' + err.message, 6000); }
+}
+async function onMapRemove(e) {
+  const a = M.aliases[+e.target.dataset.i];
+  try {
+    await api('/api/aliases', { method: 'DELETE', body: { league: M.league, kind: 'player', bet365Name: a.bet365_name } });
+    M.aliases.splice(+e.target.dataset.i, 1); renderMapping();
+  } catch (err) { toast('Not removed: ' + err.message, 6000); }
 }
 
 // ---------- recent runs ----------

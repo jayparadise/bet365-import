@@ -160,6 +160,7 @@ export function makeResolver(roster, aliases) {
   }
   const resolve = name => {
     const k = norm(name);
+    if (aliases && aliases[k] === 'IGNORE') return [null, 'ignored'];
     if (aliases && aliases[k] && byId[aliases[k]]) { const p = byId[aliases[k]]; return [byNorm[norm(p.player.name)], 'alias']; }
     if (byNorm[k]) return [byNorm[k], 'exact'];
     const toks = new Set(k.split(' '));

@@ -87,7 +87,7 @@
 
   <section class="card hidden" id="filesCard">
     <h2><span class="step">2</span> bet365 saves</h2>
-    <p class="muted" style="margin:0 0 10px">On each bet365 tab (Shots, Shots On Target, Tackles, Score or Assist, To Be Booked) press <b>Ctrl+S → "Webpage, Complete"</b>, then drop the .html files here. Files are read in your browser; only the extracted prices are sent on.</p>
+    <p class="muted" style="margin:0 0 10px">On each bet365 tab (Shots, Shots On Target, Tackles, Goals and Assists — bet365 calls it "Score or Assist" — and To Be Booked) press <b>Ctrl+S → "Webpage, Complete"</b>, then drop the .html files here. Files are read in your browser; only the extracted prices are sent on.</p>
     <div class="drop" id="drop">Drop .html files here or click to choose</div>
     <input type="file" id="fileInput" accept=".html,.htm" multiple class="hidden">
     <div id="tabs" style="margin-top:10px"></div>
@@ -103,7 +103,7 @@
 
   <section class="card hidden" id="reviewCard">
     <h2><span class="step">3</span> Import</h2>
-    <p class="muted" style="margin:0 0 10px">Players are matched to the app rosters automatically (exact name or unambiguous partial name). Anything else is skipped and listed in the result. Games are marked completed only when every tab the league uses was provided (Tackles are not used for Eredivisie, Libertadores, Ligue 1, MLS, Liga MX, Primeira Liga and Süper Lig).</p>
+    <p class="muted" style="margin:0 0 10px">Players are matched to the app rosters automatically (exact name or unambiguous partial name). Anything else is skipped and listed in the result. Only the statistics in the uploaded files are touched; other columns are left exactly as they are. A game is marked completed once every column the league needs has data (Shots, SOT, Assists, Cards, Goals — plus Tackles for EPL, La Liga, UCL, Serie A, Bundesliga and Brazil).</p>
     <p id="modeNote" style="margin:0 0 10px"></p>
     <div class="row">
       <button id="btnRun" class="primary">Import now</button>
@@ -142,8 +142,16 @@ import { FIELDS, FIELD_LABELS, TABS, parseBet365Html, buildRows, norm, makeResol
 const $ = id => document.getElementById(id);
 const S = { protected: false, serviceUser: null, leagues: [], league: '', fixtures: [], files: {}, rows: {}, aliases: { player: {}, team: {} }, games: [], allFive: false };
 // Leagues where DST does not offer player tackles: the Tackles tab is not required to mark games completed.
-const NO_TACKLES = new Set(['ere', 'liber', 'lig', 'mls', 'mxa', 'mxc', 'por', 'tur']);
-const requiredTabs = () => TABS.filter(t => !(t === 'Tackles' && NO_TACKLES.has(S.league)));
+// Leagues where DST offers player tackles. Everywhere else the Tackles tab is not used and not required for completion.
+const TACKLES_LEAGUES = new Set(['epl', 'laliga', 'ucl', 'seriea', 'dfl', 'brz']);
+const usesTackles = () => TACKLES_LEAGUES.has(S.league);
+const requiredTabs = () => TABS.filter(t => !(t === 'Tackles' && !usesTackles()));
+const TAB_LABEL = { 'Score or Assist': 'Goals and Assists' };
+const tabLabel = t => TAB_LABEL[t] || t;
+// which app fields each bet365 tab feeds
+const TAB_FIELDS = { 'Shots': [0, 1], 'Shots On Target': [2], 'Tackles': [3], 'Score or Assist': [4, 6], 'To Be Booked': [5] };
+// fields that must hold data (for at least one player) before a game is marked completed
+const requiredFieldIdx = () => [0, 1, 2, 4, 5, 6].concat(usesTackles() ? [3] : []);
 const LEAGUE_NAMES = { mls: 'MLS', laliga: 'La Liga', dfl: 'Bundesliga (DFL)', epl: 'Premier League', seriea: 'Serie A', lig: 'Ligue 1', ere: 'Eredivisie', por: 'Primeira Liga', tur: 'Süper Lig', mxa: 'Liga MX', brz: 'Brasileirão', liber: 'Libertadores', ucl: 'Champions League', eurl: 'Europa League' };
 
 function toast(msg, ms = 2500) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
@@ -235,14 +243,14 @@ async function addFiles(list) {
 }
 function renderTabs() {
   const req = requiredTabs();
-  const chips = TABS.map(t => S.files[t] ? `<span class="chip ok">✓ ${t} · ${S.files[t].games.length} games</span>` : (req.includes(t) ? `<span class="chip miss">${t} — not provided</span>` : `<span class="chip miss">${t} — not used for this league</span>`)).join('');
+  const chips = TABS.map(t => S.files[t] ? `<span class="chip ok">✓ ${tabLabel(t)} · ${S.files[t].games.length} games</span>` : (req.includes(t) ? `<span class="chip miss">${tabLabel(t)} — not provided</span>` : `<span class="chip miss">${tabLabel(t)} — not used for this league</span>`)).join('');
   const missing = req.filter(t => !S.files[t]);
   S.allFive = missing.length === 0;
   let note = '';
   if (Object.keys(S.files).length && missing.length) {
     const cols = [];
     if (!S.files['Shots']) cols.push('Shots value and price'); if (!S.files['Shots On Target']) cols.push('0.5 SOT'); if (!S.files['Tackles'] && req.includes('Tackles')) cols.push('1.5 Tackles'); if (!S.files['Score or Assist']) cols.push('Assist and Goals'); if (!S.files['To Be Booked']) cols.push('Cards');
-    note = `<div class="muted" style="margin-top:6px">${cols.join(', ')} will be left blank; games will <b>not</b> be marked completed.</div>`;
+    note = `<div class="muted" style="margin-top:6px">${cols.join(', ')} are not in this upload and will be left as they are; a game is marked completed only once every column it needs has data.</div>`;
   }
   $('tabs').innerHTML = chips + note;
   $('btnMatch').disabled = !(S.league && Object.keys(S.files).length);
@@ -251,8 +259,8 @@ function renderTabs() {
 // ---------- matching (automatic) ----------
 $('btnMatch').onclick = () => {
   $('reviewCard').classList.remove('hidden'); $('runCard').classList.add('hidden');
-  $('runNote').textContent = `${Object.keys(S.files).length} tab(s), ${S.allFive ? 'games will be marked completed' : 'games will stay open'}`;
-  $('modeNote').innerHTML = $('optOverwrite').checked ? '<b class="err">Overwrite mode:</b> values already in the app will be replaced with the bet365 values for every matched player.' : '<b>Fill-empty mode:</b> values already in the app are kept; only empty cells are filled.';
+  $('runNote').textContent = `${Object.keys(S.files).map(tabLabel).join(', ')}`;
+  $('modeNote').innerHTML = $('optOverwrite').checked ? '<b class="err">Overwrite mode:</b> for the uploaded statistics, values already in the app are replaced with the bet365 values (where bet365 has a price).' : '<b>Fill-empty mode:</b> values already in the app are kept; only empty cells of the uploaded statistics are filled.';
   $('reviewCard').scrollIntoView({ behavior: 'smooth' });
 };
 async function loadAliases() {
@@ -299,7 +307,8 @@ async function runImport() {
   $('runCard').scrollIntoView({ behavior: 'smooth' });
   await prepare();
   const games = S.games.filter(g => g.fixture && g.roster);
-  const markComplete = S.allFive;
+  const uploaded = new Set(Object.keys(S.files).flatMap(t => TAB_FIELDS[t] || [])); // field indexes this upload may change
+  const reqIdx = requiredFieldIdx();
   $('prog').max = games.length;
   const report = []; const logRows = [];
   for (const g of S.games.filter(g => !g.fixture || g.rosterError)) report.push({ game: g.title, title: g.title, matched: 0, unchanged: 0, saved: 0, errors: [g.rosterError || 'no matching fixture in the app — skipped'], verifyOk: 0, mismatches: [], completed: false, skipped: [], dupes: [], outOfRange: 0 });
@@ -313,7 +322,11 @@ async function runImport() {
       if (r.entries.length > 1) rep.dupes.push(r.entries[0].player.name);
       for (const p of r.entries) {
         const input = { gameId: g.fixture.id, playerId: p.player.id };
-        FIELDS.forEach((f, i) => { let v = r.vals[i]; if (g.onlyEmpty && p[f] != null) v = p[f]; input[f] = v == null ? null : Number(v); });
+        FIELDS.forEach((f, i) => {
+          let v = p[f] ?? null;                                   // default: leave the cell as it is
+          if (uploaded.has(i) && r.vals[i] != null && (!g.onlyEmpty || p[f] == null)) v = r.vals[i]; // uploaded stat with a bet365 price
+          input[f] = v == null ? null : Number(v);
+        });
         const logRow = { game: rep.game, bet365: r.name, player: p.player.name, team: p.team.abbreviation, how: r.how, values: FIELDS.map(f => input[f]), before: FIELDS.map(f => p[f] ?? null), src: S.src[g.title]?.[r.name] || null, action: 'saved' };
         logRows.push(logRow);
         if (FIELDS.every(f => same(p[f], input[f]))) { rep.unchanged++; logRow.action = 'unchanged'; continue; }
@@ -324,16 +337,21 @@ async function runImport() {
     if (inputs.length) {
       const res = await gqlBatch(inputs.map(x => ({ operationName: 'SavePlayerMarket', variables: { input: x.input } })));
       res.forEach((x, i) => { if (x.error) { rep.errors.push(`${inputs[i].name}: ${x.error}`); const lr = logRows.find(l => l.game === rep.game && l.player === inputs[i].name && l.action === 'saved'); if (lr) lr.action = 'error'; } else rep.saved++; });
-      // verify by re-reading
-      const d = await gqlOne('GamePlayersDataEntry', { gameId: g.fixture.id });
-      const cur = {}; for (const p of [...d.gamePlayersDataEntry.homeTeamPlayers, ...d.gamePlayersDataEntry.awayTeamPlayers]) cur[p.player.id] = p;
-      for (const x of inputs) {
-        const p = cur[x.input.playerId];
-        const diffs = FIELDS.filter(f => !same(p?.[f], x.input[f]));
-        if (diffs.length) rep.mismatches.push(`${x.name}: ${diffs.join(', ')}`); else rep.verifyOk++;
-      }
     }
-    if (markComplete && !rep.errors.length && !rep.mismatches.length) {
+    // re-read: verify what was written and see which columns now hold data
+    const d = await gqlOne('GamePlayersDataEntry', { gameId: g.fixture.id });
+    const after = [...d.gamePlayersDataEntry.homeTeamPlayers, ...d.gamePlayersDataEntry.awayTeamPlayers];
+    const cur = {}; for (const p of after) cur[p.player.id] = p;
+    for (const x of inputs) {
+      const p = cur[x.input.playerId];
+      const diffs = FIELDS.filter(f => !same(p?.[f], x.input[f]));
+      if (diffs.length) rep.mismatches.push(`${x.name}: ${diffs.join(', ')}`); else rep.verifyOk++;
+    }
+    const missingCols = reqIdx.filter(i => !after.some(p => p[FIELDS[i]] != null)).map(i => FIELD_LABELS[i]);
+    rep.missingCols = missingCols;
+    const alreadyComplete = /complet/i.test(d.gamePlayersDataEntry.status || '') || isComplete(g.fixture);
+    if (alreadyComplete) rep.completed = true;
+    else if (!missingCols.length && !rep.errors.length && !rep.mismatches.length) {
       try { await gqlOne('MarkFixtureCompleted', { gameId: g.fixture.id, completed: true }); rep.completed = true; }
       catch (e) { rep.errors.push('mark completed: ' + e.message); }
     }
@@ -341,7 +359,7 @@ async function runImport() {
     $('prog').value = report.length;
     renderReport(report, false);
   }
-  $('runStatus').textContent = `Done — ${report.reduce((a, r) => a + r.saved, 0)} rows saved across ${games.length} games${markComplete ? ', games marked completed' : ' (games left open: not all required tabs provided)'}.`;
+  $('runStatus').textContent = `Done — ${report.reduce((a, r) => a + r.saved, 0)} rows saved across ${games.length} games; ${report.filter(r => r.completed).length} complete.`;
   renderReport(report, true);
   api('/api/runs', { method: 'POST', body: { league: S.league, username: traderName(), summary: { tabs: Object.keys(S.files), overwrite: $('optOverwrite').checked, games: report.map(r => ({ game: r.game, matched: r.matched, saved: r.saved, unchanged: r.unchanged, verifyOk: r.verifyOk, mismatches: r.mismatches.length, errors: r.errors.length, completed: r.completed, skipped: r.skipped.length })) }, detail: { tabs: Object.keys(S.files), overwrite: $('optOverwrite').checked, fields: FIELDS, rows: logRows } } }).catch(() => {});
   loadLeagues().catch(() => {});
@@ -352,7 +370,7 @@ async function runImport() {
 }
 function renderReport(report, done) {
   $('report').innerHTML = `<table><tr><th>Game</th><th>Matched</th><th>Saved</th><th>Unchanged</th><th>Verified</th><th>Mismatch</th><th>Errors</th><th>Completed</th><th>Skipped names</th></tr>` +
-    report.map(r => `<tr><td>${esc(r.game)}</td><td class="num">${r.matched}</td><td class="num">${r.saved}</td><td class="num">${r.unchanged}</td><td class="num ${r.mismatches.length ? 'err' : 'ok'}">${r.verifyOk}</td><td class="num ${r.mismatches.length ? 'err' : ''}">${r.mismatches.length}</td><td class="num ${r.errors.length ? 'err' : ''}">${r.errors.length}</td><td>${r.completed ? '<span class="ok">✓</span>' : '—'}</td><td style="white-space:normal" class="muted">${esc(r.skipped.join(', '))}${r.dupes.length ? ` <i>(dupes filled: ${esc(r.dupes.join(', '))})</i>` : ''}</td></tr>` +
+    report.map(r => `<tr><td>${esc(r.game)}</td><td class="num">${r.matched}</td><td class="num">${r.saved}</td><td class="num">${r.unchanged}</td><td class="num ${r.mismatches.length ? 'err' : 'ok'}">${r.verifyOk}</td><td class="num ${r.mismatches.length ? 'err' : ''}">${r.mismatches.length}</td><td class="num ${r.errors.length ? 'err' : ''}">${r.errors.length}</td><td>${r.completed ? '<span class="ok">✓</span>' : `<span class="muted" title="columns still without data">open${r.missingCols && r.missingCols.length ? ': needs ' + esc(r.missingCols.join(', ')) : ''}</span>`}</td><td style="white-space:normal" class="muted">${esc(r.skipped.join(', '))}${r.dupes.length ? ` <i>(dupes filled: ${esc(r.dupes.join(', '))})</i>` : ''}</td></tr>` +
       (r.errors.length || r.mismatches.length ? `<tr><td colspan="9" class="err" style="white-space:normal">${esc([...r.errors, ...r.mismatches].join(' · '))}</td></tr>` : '')).join('') + '</table>' +
     (done ? `<p class="muted">Out-of-range prices (over 20) accepted: ${report.reduce((a, r) => a + r.outOfRange, 0)}.</p>` : '');
 }

@@ -129,6 +129,8 @@
 
   <section class="card hidden" id="runsCard">
     <h2>Recent imports <button id="btnRunsClose" style="margin-left:auto">close</button></h2>
+    <div class="row" style="margin-bottom:10px"><input type="text" id="findName" placeholder="find a player, e.g. Gonzalo Garcia" style="width:280px"><select id="findLeague"><option value="">all leagues</option></select><button id="btnFind">Search uploads</button><span id="findInfo" class="muted"></span></div>
+    <div id="findResults"></div>
     <div id="runsList"></div>
   </section>
 </main>
@@ -262,6 +264,8 @@ async function prepare() {
   await loadAliases();
   const tabs = {}; for (const [t, f] of Object.entries(S.files)) tabs[t] = f.games;
   S.rows = buildRows(tabs);
+  S.src = {}; // raw bet365 prices per game title / player / tab, kept for the import log
+  for (const [t, games] of Object.entries(tabs)) for (const g of games) for (const [n, p] of Object.entries(g.rows)) ((S.src[g.title] ??= {})[n] ??= {})[t] = p;
   const used = new Set();
   S.games = Object.keys(S.rows).sort().map(title => {
     const m = matchFixture(title, S.fixtures.filter(f => !used.has(f.id)), S.aliases.team);
@@ -297,27 +301,29 @@ async function runImport() {
   const games = S.games.filter(g => g.fixture && g.roster);
   const markComplete = S.allFive;
   $('prog').max = games.length;
-  const report = [];
+  const report = []; const logRows = [];
   for (const g of S.games.filter(g => !g.fixture || g.rosterError)) report.push({ game: g.title, title: g.title, matched: 0, unchanged: 0, saved: 0, errors: [g.rosterError || 'no matching fixture in the app — skipped'], verifyOk: 0, mismatches: [], completed: false, skipped: [], dupes: [], outOfRange: 0 });
   for (const g of games) {
     const rep = { game: `${g.fixture.homeTeam.name} v ${g.fixture.awayTeam.name}`, title: g.title, matched: 0, unchanged: 0, saved: 0, errors: [], verifyOk: 0, mismatches: [], completed: false, skipped: g.rows.filter(r => r.skip && r.how !== 'ignored').map(r => r.name), dupes: [], outOfRange: 0 };
     $('runStatus').textContent = `Saving ${rep.game}…`;
     const inputs = [];
     for (const r of g.rows) {
-      if (r.skip || !r.entries) continue;
+      if (r.skip || !r.entries) { logRows.push({ game: rep.game, bet365: r.name, player: null, team: null, how: r.how, values: r.vals, before: null, src: S.src[g.title]?.[r.name] || null, action: r.how === 'ignored' ? 'ignored' : 'skipped' }); continue; }
       rep.matched++;
       if (r.entries.length > 1) rep.dupes.push(r.entries[0].player.name);
       for (const p of r.entries) {
         const input = { gameId: g.fixture.id, playerId: p.player.id };
         FIELDS.forEach((f, i) => { let v = r.vals[i]; if (g.onlyEmpty && p[f] != null) v = p[f]; input[f] = v == null ? null : Number(v); });
-        if (FIELDS.every(f => same(p[f], input[f]))) { rep.unchanged++; continue; }
+        const logRow = { game: rep.game, bet365: r.name, player: p.player.name, team: p.team.abbreviation, how: r.how, values: FIELDS.map(f => input[f]), before: FIELDS.map(f => p[f] ?? null), src: S.src[g.title]?.[r.name] || null, action: 'saved' };
+        logRows.push(logRow);
+        if (FIELDS.every(f => same(p[f], input[f]))) { rep.unchanged++; logRow.action = 'unchanged'; continue; }
         if ((input.assistPrice ?? 0) > 20 || (input.goals ?? 0) > 20 || (input.cards ?? 0) > 20) rep.outOfRange++;
         inputs.push({ input, name: p.player.name });
       }
     }
     if (inputs.length) {
       const res = await gqlBatch(inputs.map(x => ({ operationName: 'SavePlayerMarket', variables: { input: x.input } })));
-      res.forEach((x, i) => { if (x.error) rep.errors.push(`${inputs[i].name}: ${x.error}`); else rep.saved++; });
+      res.forEach((x, i) => { if (x.error) { rep.errors.push(`${inputs[i].name}: ${x.error}`); const lr = logRows.find(l => l.game === rep.game && l.player === inputs[i].name && l.action === 'saved'); if (lr) lr.action = 'error'; } else rep.saved++; });
       // verify by re-reading
       const d = await gqlOne('GamePlayersDataEntry', { gameId: g.fixture.id });
       const cur = {}; for (const p of [...d.gamePlayersDataEntry.homeTeamPlayers, ...d.gamePlayersDataEntry.awayTeamPlayers]) cur[p.player.id] = p;
@@ -337,7 +343,7 @@ async function runImport() {
   }
   $('runStatus').textContent = `Done — ${report.reduce((a, r) => a + r.saved, 0)} rows saved across ${games.length} games${markComplete ? ', games marked completed' : ' (games left open: not all required tabs provided)'}.`;
   renderReport(report, true);
-  api('/api/runs', { method: 'POST', body: { league: S.league, username: traderName(), summary: { tabs: Object.keys(S.files), games: report.map(r => ({ game: r.game, matched: r.matched, saved: r.saved, unchanged: r.unchanged, verifyOk: r.verifyOk, mismatches: r.mismatches.length, errors: r.errors.length, completed: r.completed, skipped: r.skipped.length })) } } }).catch(() => {});
+  api('/api/runs', { method: 'POST', body: { league: S.league, username: traderName(), summary: { tabs: Object.keys(S.files), overwrite: $('optOverwrite').checked, games: report.map(r => ({ game: r.game, matched: r.matched, saved: r.saved, unchanged: r.unchanged, verifyOk: r.verifyOk, mismatches: r.mismatches.length, errors: r.errors.length, completed: r.completed, skipped: r.skipped.length })) }, detail: { tabs: Object.keys(S.files), overwrite: $('optOverwrite').checked, fields: FIELDS, rows: logRows } } }).catch(() => {});
   loadLeagues().catch(() => {});
   // remember unmatched names for the Name Mapping page
   const items = [];
@@ -411,6 +417,7 @@ async function onMapRemove(e) {
 
 // ---------- recent runs ----------
 $('btnRuns').onclick = async () => {
+  $('findLeague').innerHTML = '<option value="">all leagues</option>' + S.leagues.map(l => `<option value="${l}">${esc(LEAGUE_NAMES[l] || l)}</option>`).join('');
   const { runs } = await api('/api/runs');
   $('runsList').innerHTML = runs.length ? `<table><tr><th>When</th><th>League</th><th>User</th><th>Games</th><th>Saved</th><th>Completed</th></tr>` + runs.map(r => {
     const g = r.summary?.games || [];
@@ -419,6 +426,20 @@ $('btnRuns').onclick = async () => {
   $('runsCard').classList.remove('hidden'); $('runsCard').scrollIntoView({ behavior: 'smooth' });
 };
 $('btnRunsClose').onclick = () => $('runsCard').classList.add('hidden');
+$('btnFind').onclick = findPlayer;
+$('findName').onkeydown = e => { if (e.key === 'Enter') findPlayer(); };
+async function findPlayer() {
+  const q = $('findName').value.trim(); if (!q) return;
+  $('findLeague').innerHTML = '<option value="">all leagues</option>' + S.leagues.map(l => `<option value="${l}" ${$('findLeague').value === l ? 'selected' : ''}>${esc(LEAGUE_NAMES[l] || l)}</option>`).join('');
+  $('findInfo').textContent = 'searching…'; $('findResults').innerHTML = '';
+  try {
+    const { hits } = await api(`/api/runs?q=${encodeURIComponent(q)}&league=${encodeURIComponent($('findLeague').value)}`);
+    $('findInfo').textContent = `${hits.length} row(s) in the last 40 uploads`;
+    const srcText = src => src ? Object.entries(src).map(([t, p]) => `${t}: ${p.map(fmt).join(' / ')}`).join(' · ') : '';
+    $('findResults').innerHTML = hits.length ? `<table><tr><th>When</th><th>League</th><th>Game</th><th>bet365 → app player</th><th>Action</th>${FIELD_LABELS.map(l => `<th style="text-align:right">${l}</th>`).join('')}<th>bet365 source prices</th></tr>` +
+      hits.map(h => `<tr><td>${esc(new Date(h.at).toLocaleString())}</td><td>${esc(LEAGUE_NAMES[h.league] || h.league)}</td><td>${esc(h.game)}</td><td>${esc(h.bet365)}${h.player ? ' → ' + esc(h.player) + ' (' + esc(h.team) + ')' : ''}</td><td class="${h.action === 'saved' ? 'ok' : h.action === 'error' ? 'err' : 'muted'}">${esc(h.action)}</td>${(h.values || []).map(v => `<td class="num">${fmt(v)}</td>`).join('')}<td class="muted" style="white-space:normal;font-size:12px">${esc(srcText(h.src))}</td></tr>`).join('') + '</table>' : '<p class="muted">No rows found.</p>';
+  } catch (e) { $('findInfo').textContent = e.message; }
+}
 
 // ---------- boot ----------
 async function boot() {

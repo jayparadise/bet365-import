@@ -103,7 +103,7 @@
 
   <section class="card hidden" id="reviewCard">
     <h2><span class="step">3</span> Import</h2>
-    <p class="muted" style="margin:0 0 10px">Players are matched to the app rosters automatically (exact name or unambiguous partial name). Anything else is skipped and listed in the result. Only the statistics in the uploaded files are touched; other columns are left exactly as they are. A game is marked completed once every column the league needs has data (Shots, SOT, Assists, Cards, Goals — plus Tackles for EPL, La Liga, UCL, Serie A, Bundesliga and Brazil).</p>
+    <p class="muted" style="margin:0 0 10px">Players are matched to the app rosters automatically (exact name or unambiguous partial name). Anything else is skipped and listed in the result. Only the statistics in the uploaded files are touched; other columns are left exactly as they are. A game is marked completed once every column the league needs has data (Shots, SOT, Assists, Goals everywhere; plus Cards except in Turkey; plus Tackles for EPL, La Liga, UCL, Serie A, Bundesliga and Brazil).</p>
     <p id="modeNote" style="margin:0 0 10px"></p>
     <div class="row">
       <button id="btnRun" class="primary">Import now</button>
@@ -145,13 +145,16 @@ const S = { protected: false, serviceUser: null, leagues: [], league: '', fixtur
 // Leagues where DST offers player tackles. Everywhere else the Tackles tab is not used and not required for completion.
 const TACKLES_LEAGUES = new Set(['epl', 'laliga', 'ucl', 'seriea', 'dfl', 'brz']);
 const usesTackles = () => TACKLES_LEAGUES.has(S.league);
-const requiredTabs = () => TABS.filter(t => !(t === 'Tackles' && !usesTackles()));
+// Leagues where DST does not offer player cards: the To Be Booked tab is not used and not required for completion (Jason, 2026-10-19: Turkey).
+const NO_CARDS_LEAGUES = new Set(['tur']);
+const usesCards = () => !NO_CARDS_LEAGUES.has(S.league);
+const requiredTabs = () => TABS.filter(t => !(t === 'Tackles' && !usesTackles()) && !(t === 'To Be Booked' && !usesCards()));
 const TAB_LABEL = { 'Score or Assist': 'Goals and Assists' };
 const tabLabel = t => TAB_LABEL[t] || t;
 // which app fields each bet365 tab feeds
 const TAB_FIELDS = { 'Shots': [0, 1], 'Shots On Target': [2], 'Tackles': [3], 'Score or Assist': [4, 6], 'To Be Booked': [5] };
 // fields that must hold data (for at least one player) before a game is marked completed
-const requiredFieldIdx = () => [0, 1, 2, 4, 5, 6].concat(usesTackles() ? [3] : []);
+const requiredFieldIdx = () => [0, 1, 2, 4, 6].concat(usesTackles() ? [3] : []).concat(usesCards() ? [5] : []);
 // Data-entry league key -> code shown in the app, and a plain-English name
 const LEAGUE_META = { brz: ['BRZ', 'Brazil (Brasileirão)'], dfl: ['DFL', 'Germany (Bundesliga)'], epl: ['EPL', 'England (Premier League)'], ere: ['ERE', 'Netherlands (Eredivisie)'], eurl: ['UEL', 'Europa League'], laliga: ['LALIGA', 'Spain (La Liga)'], liber: ['LIBER', 'Copa Libertadores'], lig: ['LIG', 'France (Ligue 1)'], mls: ['MLS', 'USA (MLS)'], mxa: ['MXA', 'Mexico (Liga MX)'], mxc: ['MXC', 'Mexico (Liga MX Clausura)'], por: ['POR', 'Portugal (Primeira Liga)'], seriea: ['SERIEA', 'Italy (Serie A)'], tur: ['TUR', 'Turkey (Süper Lig)'], ucl: ['UCL', 'Champions League'] };
 const LEAGUE_NAMES = Object.fromEntries(Object.entries(LEAGUE_META).map(([k, v]) => [k, `${v[0]} · ${v[1]}`]));
@@ -252,7 +255,7 @@ function renderTabs() {
   let note = '';
   if (Object.keys(S.files).length && missing.length) {
     const cols = [];
-    if (!S.files['Shots']) cols.push('Shots value and price'); if (!S.files['Shots On Target']) cols.push('0.5 SOT'); if (!S.files['Tackles'] && req.includes('Tackles')) cols.push('1.5 Tackles'); if (!S.files['Score or Assist']) cols.push('Assist and Goals'); if (!S.files['To Be Booked']) cols.push('Cards');
+    if (!S.files['Shots']) cols.push('Shots value and price'); if (!S.files['Shots On Target']) cols.push('0.5 SOT'); if (!S.files['Tackles'] && req.includes('Tackles')) cols.push('1.5 Tackles'); if (!S.files['Score or Assist']) cols.push('Assist and Goals'); if (!S.files['To Be Booked'] && req.includes('To Be Booked')) cols.push('Cards');
     note = `<div class="muted" style="margin-top:6px">${cols.join(', ')} are not in this upload and will be left as they are; a game is marked completed only once every column it needs has data.</div>`;
   }
   $('tabs').innerHTML = chips + note;

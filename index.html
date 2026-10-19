@@ -152,7 +152,10 @@ const tabLabel = t => TAB_LABEL[t] || t;
 const TAB_FIELDS = { 'Shots': [0, 1], 'Shots On Target': [2], 'Tackles': [3], 'Score or Assist': [4, 6], 'To Be Booked': [5] };
 // fields that must hold data (for at least one player) before a game is marked completed
 const requiredFieldIdx = () => [0, 1, 2, 4, 5, 6].concat(usesTackles() ? [3] : []);
-const LEAGUE_NAMES = { mls: 'MLS', laliga: 'La Liga', dfl: 'Bundesliga (DFL)', epl: 'Premier League', seriea: 'Serie A', lig: 'Ligue 1', ere: 'Eredivisie', por: 'Primeira Liga', tur: 'Süper Lig', mxa: 'Liga MX', brz: 'Brasileirão', liber: 'Libertadores', ucl: 'Champions League', eurl: 'Europa League' };
+// Data-entry league key -> code shown in the app, and a plain-English name
+const LEAGUE_META = { brz: ['BRZ', 'Brazil (Brasileirão)'], dfl: ['DFL', 'Germany (Bundesliga)'], epl: ['EPL', 'England (Premier League)'], ere: ['ERE', 'Netherlands (Eredivisie)'], eurl: ['UEL', 'Europa League'], laliga: ['LALIGA', 'Spain (La Liga)'], liber: ['LIBER', 'Copa Libertadores'], lig: ['LIG', 'France (Ligue 1)'], mls: ['MLS', 'USA (MLS)'], mxa: ['MXA', 'Mexico (Liga MX)'], mxc: ['MXC', 'Mexico (Liga MX Clausura)'], por: ['POR', 'Portugal (Primeira Liga)'], seriea: ['SERIEA', 'Italy (Serie A)'], tur: ['TUR', 'Turkey (Süper Lig)'], ucl: ['UCL', 'Champions League'] };
+const LEAGUE_NAMES = Object.fromEntries(Object.entries(LEAGUE_META).map(([k, v]) => [k, `${v[0]} · ${v[1]}`]));
+const leagueLabel = l => LEAGUE_NAMES[l] || l.toUpperCase();
 
 function toast(msg, ms = 2500) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
 async function api(path, opts = {}) {
@@ -205,10 +208,10 @@ async function loadLeagues() {
   const d = await gqlOne('UpcomingFixtures', { filter: {} });
   const all = d.upcomingFixtures.fixtures;
   const by = {}; for (const f of all) (by[f.leagueName] ??= []).push(f);
-  S.leagues = Object.keys(by).sort();
+  S.leagues = Object.keys(by).sort((a, b) => (LEAGUE_META[a]?.[0] || a).localeCompare(LEAGUE_META[b]?.[0] || b));
   S.allFixtures = by;
   const sel = $('league');
-  sel.innerHTML = '<option value="">— choose a league —</option>' + S.leagues.map(l => `<option value="${l}">${esc(LEAGUE_NAMES[l] || l)} (${by[l].length})</option>`).join('');
+  sel.innerHTML = '<option value="">— choose a league —</option>' + S.leagues.map(l => `<option value="${l}">${esc(leagueLabel(l))} — ${by[l].length} fixtures</option>`).join('');
   if (S.league && by[S.league]) { sel.value = S.league; renderFixtures(); }
 }
 $('league').onchange = () => { S.league = $('league').value; renderFixtures(); renderTabs(); };
@@ -378,7 +381,7 @@ function renderReport(report, done) {
 // ---------- name mapping page ----------
 const M = { league: '', items: [], aliases: [], rosters: {} };
 $('btnMap').onclick = async () => {
-  $('mapLeague').innerHTML = S.leagues.map(l => `<option value="${l}" ${l === (S.league || M.league) ? 'selected' : ''}>${esc(LEAGUE_NAMES[l] || l)}</option>`).join('');
+  $('mapLeague').innerHTML = S.leagues.map(l => `<option value="${l}" ${l === (S.league || M.league) ? 'selected' : ''}>${esc(leagueLabel(l))}</option>`).join('');
   M.league = $('mapLeague').value;
   $('mapCard').classList.remove('hidden'); $('mapCard').scrollIntoView({ behavior: 'smooth' });
   await loadMapping();
@@ -435,11 +438,11 @@ async function onMapRemove(e) {
 
 // ---------- recent runs ----------
 $('btnRuns').onclick = async () => {
-  $('findLeague').innerHTML = '<option value="">all leagues</option>' + S.leagues.map(l => `<option value="${l}">${esc(LEAGUE_NAMES[l] || l)}</option>`).join('');
+  $('findLeague').innerHTML = '<option value="">all leagues</option>' + S.leagues.map(l => `<option value="${l}">${esc(leagueLabel(l))}</option>`).join('');
   const { runs } = await api('/api/runs');
   $('runsList').innerHTML = runs.length ? `<table><tr><th>When</th><th>League</th><th>User</th><th>Games</th><th>Saved</th><th>Completed</th></tr>` + runs.map(r => {
     const g = r.summary?.games || [];
-    return `<tr><td>${esc(new Date(r.created_at).toLocaleString())}</td><td>${esc(LEAGUE_NAMES[r.league] || r.league)}</td><td>${esc(r.username)}</td><td class="num">${g.length}</td><td class="num">${g.reduce((a, x) => a + (x.saved || 0), 0)}</td><td class="num">${g.filter(x => x.completed).length}</td></tr>`;
+    return `<tr><td>${esc(new Date(r.created_at).toLocaleString())}</td><td>${esc(leagueLabel(r.league))}</td><td>${esc(r.username)}</td><td class="num">${g.length}</td><td class="num">${g.reduce((a, x) => a + (x.saved || 0), 0)}</td><td class="num">${g.filter(x => x.completed).length}</td></tr>`;
   }).join('') + '</table>' : '<p class="muted">No imports yet.</p>';
   $('runsCard').classList.remove('hidden'); $('runsCard').scrollIntoView({ behavior: 'smooth' });
 };
@@ -448,14 +451,14 @@ $('btnFind').onclick = findPlayer;
 $('findName').onkeydown = e => { if (e.key === 'Enter') findPlayer(); };
 async function findPlayer() {
   const q = $('findName').value.trim(); if (!q) return;
-  $('findLeague').innerHTML = '<option value="">all leagues</option>' + S.leagues.map(l => `<option value="${l}" ${$('findLeague').value === l ? 'selected' : ''}>${esc(LEAGUE_NAMES[l] || l)}</option>`).join('');
+  $('findLeague').innerHTML = '<option value="">all leagues</option>' + S.leagues.map(l => `<option value="${l}" ${$('findLeague').value === l ? 'selected' : ''}>${esc(leagueLabel(l))}</option>`).join('');
   $('findInfo').textContent = 'searching…'; $('findResults').innerHTML = '';
   try {
     const { hits } = await api(`/api/runs?q=${encodeURIComponent(q)}&league=${encodeURIComponent($('findLeague').value)}`);
     $('findInfo').textContent = `${hits.length} row(s) in the last 40 uploads`;
     const srcText = src => src ? Object.entries(src).map(([t, p]) => `${t}: ${p.map(fmt).join(' / ')}`).join(' · ') : '';
     $('findResults').innerHTML = hits.length ? `<table><tr><th>When</th><th>League</th><th>Game</th><th>bet365 → app player</th><th>Action</th>${FIELD_LABELS.map(l => `<th style="text-align:right">${l}</th>`).join('')}<th>bet365 source prices</th></tr>` +
-      hits.map(h => `<tr><td>${esc(new Date(h.at).toLocaleString())}</td><td>${esc(LEAGUE_NAMES[h.league] || h.league)}</td><td>${esc(h.game)}</td><td>${esc(h.bet365)}${h.player ? ' → ' + esc(h.player) + ' (' + esc(h.team) + ')' : ''}</td><td class="${h.action === 'saved' ? 'ok' : h.action === 'error' ? 'err' : 'muted'}">${esc(h.action)}</td>${(h.values || []).map(v => `<td class="num">${fmt(v)}</td>`).join('')}<td class="muted" style="white-space:normal;font-size:12px">${esc(srcText(h.src))}</td></tr>`).join('') + '</table>' : '<p class="muted">No rows found.</p>';
+      hits.map(h => `<tr><td>${esc(new Date(h.at).toLocaleString())}</td><td>${esc(leagueLabel(h.league))}</td><td>${esc(h.game)}</td><td>${esc(h.bet365)}${h.player ? ' → ' + esc(h.player) + ' (' + esc(h.team) + ')' : ''}</td><td class="${h.action === 'saved' ? 'ok' : h.action === 'error' ? 'err' : 'muted'}">${esc(h.action)}</td>${(h.values || []).map(v => `<td class="num">${fmt(v)}</td>`).join('')}<td class="muted" style="white-space:normal;font-size:12px">${esc(srcText(h.src))}</td></tr>`).join('') + '</table>' : '<p class="muted">No rows found.</p>';
   } catch (e) { $('findInfo').textContent = e.message; }
 }
 

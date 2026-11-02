@@ -137,7 +137,7 @@
 <div id="toast"></div>
 
 <script type="module">
-import { FIELDS, FIELD_LABELS, TABS, parseBet365Html, buildRows, norm, makeResolver, matchFixture, same } from './lib.js';
+import { FIELDS, FIELD_LABELS, TABS, parseBet365Html, buildRows, norm, makeResolver, assignFixtures, same } from './lib.js';
 
 const $ = id => document.getElementById(id);
 const S = { protected: false, serviceUser: null, leagues: [], league: '', fixtures: [], files: {}, rows: {}, aliases: { player: {}, team: {} }, games: [], allFive: false };
@@ -280,12 +280,9 @@ async function prepare() {
   S.rows = buildRows(tabs);
   S.src = {}; // raw bet365 prices per game title / player / tab, kept for the import log
   for (const [t, games] of Object.entries(tabs)) for (const g of games) for (const [n, p] of Object.entries(g.rows)) ((S.src[g.title] ??= {})[n] ??= {})[t] = p;
-  const used = new Set();
-  S.games = Object.keys(S.rows).sort().map(title => {
-    const m = matchFixture(title, S.fixtures.filter(f => !used.has(f.id)), S.aliases.team);
-    if (m.fixture) used.add(m.fixture.id);
-    return { title, fixture: m.fixture, rows: [], onlyEmpty: !$('optOverwrite').checked, roster: null };
-  });
+  const titles = Object.keys(S.rows).sort();
+  const assigned = assignFixtures(titles, S.fixtures, S.aliases.team);
+  S.games = titles.map(title => ({ title, fixture: assigned[title] || null, rows: [], onlyEmpty: !$('optOverwrite').checked, roster: null }));
   const need = S.games.filter(g => g.fixture);
   const res = await gqlBatch(need.map(g => ({ operationName: 'GamePlayersDataEntry', variables: { gameId: g.fixture.id } })));
   need.forEach((g, i) => {

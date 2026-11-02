@@ -196,14 +196,27 @@ export function matchFixture(title, fixtures, teamAliases) {
   const [h, a] = title.split(' v ').map(s => s.trim());
   const ah = teamAliases?.[norm(h)], aa = teamAliases?.[norm(a)];
   const scored = fixtures.map(f => {
-    let s = teamScore(h, f.homeTeam.name) + teamScore(a, f.awayTeam.name);
-    if (ah && norm(f.homeTeam.name) === norm(ah)) s += 1;
-    if (aa && norm(f.awayTeam.name) === norm(aa)) s += 1;
-    return { fixture: f, score: s };
+    let sh = teamScore(h, f.homeTeam.name), sa = teamScore(a, f.awayTeam.name);
+    if (ah && norm(f.homeTeam.name) === norm(ah)) sh = 2;
+    if (aa && norm(f.awayTeam.name) === norm(aa)) sa = 2;
+    return { fixture: f, score: sh + sa, min: Math.min(sh, sa) };
   }).sort((x, y) => y.score - x.score || String(x.fixture.date).localeCompare(String(y.fixture.date)));
   const best = scored[0];
-  const ok = best && best.score >= 1.0 && (!scored[1] || best.score - scored[1].score >= 0.25);
+  // both teams must match on their own (a strong home match must never carry an unrelated away team)
+  const ok = best && best.min >= 0.4 && best.score >= 1.0 && (!scored[1] || best.score - scored[1].score >= 0.25);
   return { fixture: ok ? best.fixture : null, score: best ? best.score : 0, candidates: scored.slice(0, 6) };
+}
+
+// Pair every bet365 title with at most one fixture, best scores first (so "Flamengo v Gremio" wins the
+// Flamengo–Gremio fixture even if "Flamengo v Athletico" is processed earlier alphabetically).
+export function assignFixtures(titles, fixtures, teamAliases) {
+  const out = {}; const used = new Set();
+  const cands = titles.map(t => ({ t, m: matchFixture(t, fixtures, teamAliases) })).filter(x => x.m.fixture)
+    .sort((x, y) => y.m.score - x.m.score);
+  for (const c of cands) { if (used.has(c.m.fixture.id)) continue; out[c.t] = c.m.fixture; used.add(c.m.fixture.id); }
+  // second pass for titles whose best fixture was taken: try again among the remaining fixtures
+  for (const t of titles) { if (out[t]) continue; const m = matchFixture(t, fixtures.filter(f => !used.has(f.id)), teamAliases); if (m.fixture) { out[t] = m.fixture; used.add(m.fixture.id); } }
+  return out;
 }
 
 export const same = (a, b) => Math.abs((a == null ? 0 : Number(a)) - (b == null ? 0 : Number(b))) < 0.006;

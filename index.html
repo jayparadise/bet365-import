@@ -122,9 +122,15 @@
     <h2>Name Mapping <button id="btnMapClose" style="margin-left:auto">close</button></h2>
     <p class="muted" style="margin:0 0 10px">bet365 names that recent imports could not match. Pick the data-entry player once and every future import uses it. Choose <i>ignore</i> for players who are not in the app (they stop being reported as skipped).</p>
     <div class="row" style="margin-bottom:10px"><select id="mapLeague"></select><span id="mapInfo" class="muted"></span></div>
+    <h3 style="font-size:14px;margin:14px 0 6px">Unmatched games</h3>
+    <p class="muted" style="margin:0 0 8px">bet365 games that could not be paired with a fixture in the app. Pick the fixture once and both team names are remembered for every future game. Choose <i>dismiss</i> for games that are not in the app yet (next round) — they will match normally once the fixture exists.</p>
+    <div id="mapGames"></div>
+    <h3 style="font-size:14px;margin:18px 0 6px">Unmatched players</h3>
     <div id="mapUnmatched"></div>
-    <h3 style="font-size:14px;margin:18px 0 6px">Existing mappings</h3>
+    <h3 style="font-size:14px;margin:18px 0 6px">Existing player mappings</h3>
     <div id="mapExisting"></div>
+    <h3 style="font-size:14px;margin:18px 0 6px">Existing team mappings</h3>
+    <div id="mapTeams"></div>
   </section>
 
   <section class="card hidden" id="runsCard">
@@ -369,6 +375,7 @@ async function runImport() {
   // remember unmatched names for the Name Mapping page
   const items = [];
   for (const g of games) for (const r of g.rows) if (r.skip && r.how !== 'ignored') items.push({ name: r.name, gameId: g.fixture.id, game: `${g.fixture.homeTeam.name} v ${g.fixture.awayTeam.name}` });
+  for (const g of S.games) if (!g.fixture) items.push({ name: g.title, kind: 'game' });
   if (items.length) api('/api/unmatched', { method: 'POST', body: { league: S.league, items } }).catch(() => {});
 }
 function renderReport(report, done) {
@@ -379,7 +386,7 @@ function renderReport(report, done) {
 }
 
 // ---------- name mapping page ----------
-const M = { league: '', items: [], aliases: [], rosters: {} };
+const M = { league: '', items: [], games: [], aliases: [], teams: [], rosters: {} };
 $('btnMap').onclick = async () => {
   $('mapLeague').innerHTML = S.leagues.map(l => `<option value="${l}" ${l === (S.league || M.league) ? 'selected' : ''}>${esc(leagueLabel(l))}</option>`).join('');
   M.league = $('mapLeague').value;
@@ -393,8 +400,10 @@ async function loadMapping() {
   try {
     const [u, a] = await Promise.all([api(`/api/unmatched?league=${encodeURIComponent(M.league)}`), api(`/api/aliases?league=${encodeURIComponent(M.league)}`)]);
     M.aliases = (a.aliases || []).filter(x => x.kind === 'player');
+    M.teams = (a.aliases || []).filter(x => x.kind === 'team');
     const mapped = new Set(M.aliases.map(x => norm(x.bet365_name)));
-    M.items = (u.items || []).filter(x => !mapped.has(norm(x.name)));
+    M.items = (u.items || []).filter(x => x.kind !== 'game' && !mapped.has(norm(x.name)));
+    M.games = (u.items || []).filter(x => x.kind === 'game');
     // rosters for the games the unmatched names were seen in
     const gameIds = [...new Set(M.items.map(x => x.gameId).filter(Boolean))].filter(id => !M.rosters[id]);
     if (gameIds.length) {
@@ -405,7 +414,15 @@ async function loadMapping() {
   } catch (e) { $('mapUnmatched').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 function renderMapping() {
-  $('mapInfo').textContent = `${M.items.length} unmatched, ${M.aliases.length} mapped`;
+  $('mapInfo').textContent = `${M.games.length} unmatched games, ${M.items.length} unmatched players, ${M.aliases.length + M.teams.length} mapped`;
+  const fx = (S.allFixtures?.[M.league] || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  $('mapGames').innerHTML = M.games.length ? `<table><tr><th>bet365 game</th><th>data-entry fixture</th></tr>` + M.games.map((it, i) => {
+    const opts = `<option value="">— choose —</option><option value="DISMISS">— dismiss (not in app yet) —</option>` + fx.map(f => `<option value="${f.id}">${esc(String(f.date).slice(0, 10))}  ${esc(f.homeTeam.name)} v ${esc(f.awayTeam.name)}</option>`).join('');
+    return `<tr><td>${esc(it.name)}</td><td><select class="mapgame" data-i="${i}">${opts}</select></td></tr>`;
+  }).join('') + '</table>' : '<p class="muted">Nothing to map — every game in recent imports was paired.</p>';
+  $('mapTeams').innerHTML = M.teams.length ? `<table><tr><th>bet365 team</th><th>data-entry team</th><th></th></tr>` + M.teams.map((a, i) => `<tr><td>${esc(a.bet365_name)}</td><td>${esc(a.app_name || a.app_id)}</td><td><button class="teamdel" data-i="${i}">remove</button></td></tr>`).join('') + '</table>' : '<p class="muted">No team mappings yet.</p>';
+  for (const el of document.querySelectorAll('.mapgame')) el.onchange = onGamePick;
+  for (const el of document.querySelectorAll('.teamdel')) el.onclick = onTeamRemove;
   $('mapUnmatched').innerHTML = M.items.length ? `<table><tr><th>bet365 name</th><th>seen in</th><th>data-entry player</th></tr>` + M.items.map((it, i) => {
     const roster = M.rosters[it.gameId] || [];
     const opts = `<option value="">— choose —</option><option value="IGNORE">— ignore (not in app) —</option>` + roster.map(p => `<option value="${p.id}" data-name="${esc(p.name)}">${esc(p.name)} (${esc(p.team)}${p.active ? '' : ', inactive'})</option>`).join('');
@@ -427,6 +444,33 @@ async function onMapPick(e) {
     toast(id === 'IGNORE' ? `${it.name} will be ignored` : `${it.name} → ${appName}`);
     renderMapping();
   } catch (err) { e.target.disabled = false; toast('Not saved: ' + err.message, 6000); }
+}
+async function onGamePick(e) {
+  const it = M.games[+e.target.dataset.i]; const id = e.target.value; if (!id) return;
+  e.target.disabled = true;
+  try {
+    if (id !== 'DISMISS') {
+      const f = (S.allFixtures?.[M.league] || []).find(x => x.id === id);
+      const [h, a] = it.name.split(' v ').map(x => x.trim());
+      for (const [b365, app] of [[h, f.homeTeam.name], [a, f.awayTeam.name]]) {
+        if (!b365 || !app) continue;
+        await api('/api/aliases', { method: 'POST', body: { league: M.league, kind: 'team', bet365Name: b365, appId: app, appName: app, createdBy: traderName() } });
+        M.teams = M.teams.filter(t => norm(t.bet365_name) !== norm(b365));
+        M.teams.push({ kind: 'team', bet365_name: b365, app_id: app, app_name: app });
+      }
+      toast(`${it.name} → ${f.homeTeam.name} v ${f.awayTeam.name}`);
+    } else toast(`${it.name} dismissed`);
+    await api('/api/unmatched', { method: 'DELETE', body: { league: M.league, names: [it.name] } });
+    M.games.splice(+e.target.dataset.i, 1);
+    renderMapping();
+  } catch (err) { e.target.disabled = false; toast('Not saved: ' + err.message, 6000); }
+}
+async function onTeamRemove(e) {
+  const a = M.teams[+e.target.dataset.i];
+  try {
+    await api('/api/aliases', { method: 'DELETE', body: { league: M.league, kind: 'team', bet365Name: a.bet365_name } });
+    M.teams.splice(+e.target.dataset.i, 1); renderMapping();
+  } catch (err) { toast('Not removed: ' + err.message, 6000); }
 }
 async function onMapRemove(e) {
   const a = M.aliases[+e.target.dataset.i];

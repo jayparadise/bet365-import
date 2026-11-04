@@ -177,7 +177,8 @@ export function makeResolver(roster, aliases) {
 // ---- fixture (game title) matching ----
 const TEAM_STOP = new Set(['fc', 'cf', 'sc', 'afc', 'cfc', 'club', 'de', 'the', 'rj', 'sp', 'rs', 'mg', 'pr', 'fk', 'sk', 'ac', 'as', 'ss', 'sv', 'fsv', 'bsc', 'rc', 'rcd', 'ud', 'cd', 'ca', 'sd', 'cr', 'se', 'fr', 'ec', 'cs', 'ca', '1', 'calcio', 'football', 'ks', 'nk', 'gnk', 'hnk', 'rsc', 'kv', 'kaa', 'osc', 'sm', 'ogc', 'us', 'ss', 'sa', 'bv', 'tsv', 'vfl', 'vfb', '04', '05', '96', '98', '1899', '1860', 'e.v']);
 const TEAM_SUBS = { utd: 'united', st: 'saint', 'man': 'manchester', 'nottm': 'nottingham', 'atl': 'atletico', 'ath': 'athletic', 'psg': 'paris saint germain', 'bmg': 'borussia monchengladbach', 'gladbach': 'monchengladbach', 'wolves': 'wolverhampton wanderers', 'spurs': 'tottenham hotspur', 'ny': 'new york', 'kc': 'kansas city', 'rsl': 'real salt lake', 'rb': 'red bull', 'nyc': 'new york city', 'lafc': 'los angeles football club', 'nycfc': 'new york city', 'skc': 'sporting kansas city', 'rbny': 'new york red bulls', 'cfm': 'cf montreal' };
-const tokHit = (t, B) => B.some(b => b === t || (t.length >= 4 && b.startsWith(t)) || (b.length >= 4 && t.startsWith(b)));
+// a token hits if equal, a 4+ char prefix of the other, or a near-spelling (guimaraes/guimarares, lillestrom/lillestroem)
+const tokHit = (t, B) => B.some(b => b === t || (t.length >= 4 && b.startsWith(t)) || (b.length >= 4 && t.startsWith(b)) || (t.length >= 6 && b.length >= 6 && dice(t, b) >= 0.7));
 export function teamTokens(name) {
   let n = norm(name);
   for (const [a, b] of Object.entries(TEAM_SUBS)) n = n.replace(new RegExp(`(^| )${a}( |$)`, 'g'), `$1${b}$2`);

@@ -23,11 +23,18 @@ const price = s => (/^\d+\.\d+$/.test(s) ? Number(s) : null);
 // Parse one "Webpage, Complete" save of a bet365 Weekend player-props tab.
 // Structure-based (bet365's class names are obfuscated and differ between site builds):
 //  - a game title is a leaf element whose text is "Home v Away"
-//  - a ladder / Score-or-Assist table is the group of sibling columns whose classes contain "rgl-Market-pwidth";
-//    the pwidth40 column holds the names (one child per player after a header), the others [header, cell per player]
-//  - a To Be Booked list is elements holding a name leaf + a price leaf, outside any pwidth column
 //  - each table / pair belongs to the nearest preceding title in document order
-// Returns { tab, games: [{ title, headers, rows: { bet365Name: [prices] } }] }
+//  - layout A (to early Nov 2026): a ladder / Score-or-Assist table is the group of sibling columns whose classes
+//    contain "rgl-Market-pwidth"; the pwidth40 column holds the names, the others [header, cell per player]
+//  - layout B (from Nov 2026, hashed class names only): every column is an element with exactly two children,
+//    [header, list of cells]. Price columns have cells that are a price or blank (locked); the name column
+//    ("Player / Last 5", or a blank header on Score or Assist) has one row per player holding shirt number, name and
+//    last-5 figures. A price column is paired with the nearest name column that has the same number of rows.
+//    bet365 now shows only the first 6 players of a game until "Show more" is clicked; such games come back with
+//    collapsed:true so the importer can warn and hold back "completed".
+//  - a To Be Booked list is elements holding a name leaf + a price (a leaf, or nested in the pair's second child in
+//    layout B), when no table was found on the page
+// Returns { tab, games: [{ title, headers, rows: { bet365Name: [prices] }, collapsed? }] }
 export function parseBet365Html(htmlText, Parser) {
   const doc = new Parser().parseFromString(htmlText, 'text/html');
   let tab = '';
@@ -53,6 +60,13 @@ export function parseBet365Html(htmlText, Parser) {
     let best = '', bl = 0;
     for (const l of [row, ...leaves(row)]) { const t = clean(l.textContent); const n = (t.match(/[A-Za-z\u00C0-\u024F]/g) || []).length; if (!l.children.length && n > bl) { bl = n; best = t; } }
     return best.replace(/^\d+\s*/, '').replace(/[\d\s]+$/, '').trim();
+  };
+
+  // collapsed card (Nov 2026 layout): a "Show more" button inside the smallest block that holds both el and a game title
+  const holdsTitle = el => titleEls.some(t => el.contains(t));
+  const isCollapsed = el => {
+    let card = el; while (card.parentElement && !holdsTitle(card)) card = card.parentElement;
+    return [...card.querySelectorAll('button')].some(b => /^show more$/i.test(clean(b.textContent)));
   };
 
   // ladder / score-assist tables
@@ -82,16 +96,62 @@ export function parseBet365Html(htmlText, Parser) {
     }
   }
 
+  // layout B: generic [header, cells] columns (no pwidth classes)
+  if (!order.length) {
+    const kidsText = list => [...list.children].map(c => clean(c.textContent));
+    const letters = t => (t.match(/[A-Za-z\u00C0-\u024F]/g) || []).length;
+    const priceCols = [], nameCols = [];
+    for (const el of doc.querySelectorAll('div')) {
+      if (el.children.length !== 2) continue;
+      const [h, list] = el.children; const n = list.children.length;
+      if (!n || n > 150) continue;
+      const head = clean(h.textContent); if (head.length > 40) continue;
+      const texts = kidsText(list);
+      if (texts.every(t => t === '' || price(t) != null)) {
+        if (/^\d+\+$/.test(head) || texts.some(t => t !== '')) priceCols.push({ el, head, texts, n });
+      } else if (texts.every(t => letters(t) >= 2 && t.length < 80 && !isTitle(t))) nameCols.push({ el, rows: [...list.children], n });
+    }
+    const tables = new Map(); const orphans = [];
+    for (const pc of priceCols) {
+      let found = null;
+      for (let a = pc.el.parentElement, d = 0; a && d < 10 && !found; a = a.parentElement, d++) {
+        found = nameCols.find(nc => nc.n === pc.n && nc.el !== pc.el && a.contains(nc.el) && !nc.el.contains(pc.el) && !pc.el.contains(nc.el)) || null;
+        if (!found && holdsTitle(a)) break; // never reach into another game's card
+      }
+      if (!found) { if (/^\d+\+$/.test(pc.head) || ['Score', 'Assist'].includes(pc.head)) orphans.push(pc); continue; }
+      if (!tables.has(found)) tables.set(found, []);
+      tables.get(found).push(pc);
+    }
+    if (orphans.length) throw new Error(`${nearestTitle(orphans[0].el) || 'page'}: column/name count mismatch (bet365 markup changed?)`);
+    for (const [nc, pcols] of tables) {
+      const title = nearestTitle(nc.el); if (!title) continue;
+      const names = nc.rows.map(nameOf);
+      const headers = pcols.map(c => c.head), cols = pcols.map(c => c.texts);
+      const g = game(title); g.headers = headers;
+      if (isCollapsed(nc.el)) g.collapsed = true;
+      const rung = headers.map(h => /^(\d+)\+$/.exec(h));
+      if (rung.every(Boolean)) {
+        const width = Math.max(...rung.map(m => Number(m[1])));
+        names.forEach((n, i) => { const p = Array(width).fill(null); rung.forEach((m, j) => { p[Number(m[1]) - 1] = price(cols[j][i]); }); add(g, n, p); });
+      } else {
+        names.forEach((n, i) => add(g, n, cols.map(c => price(c[i]))));
+      }
+    }
+  }
+
   // booked-style list (name + price pairs), only when no table was found on the page
   if (!order.length) {
     for (const el of doc.querySelectorAll('div,li')) {
       if (el.children.length < 2) continue;
       const kids = [...el.children].filter(k => !k.children.length);
       const nameEl = kids.find(k => /[A-Za-z]{3,}/.test(clean(k.textContent)) && !isTitle(clean(k.textContent)));
-      const priceEl = kids.find(k => /^\d+\.\d+$/.test(clean(k.textContent)));
+      // the price is a leaf child (old layout) or, in the Nov 2026 layout, the only other child with the price nested inside it
+      const priceEl = kids.find(k => /^\d+\.\d+$/.test(clean(k.textContent)))
+        || (el.children.length === 2 && nameEl === el.children[0] && /^\d+\.\d+$/.test(clean(el.children[1].textContent)) ? el.children[1] : null);
       if (!nameEl || !priceEl) continue;
       const title = nearestTitle(el); if (!title) continue;
       const g = game(title); g.headers = ['booked'];
+      if (!g.rows[clean(nameEl.textContent)] && isCollapsed(el)) g.collapsed = true;
       add(g, clean(nameEl.textContent), [price(clean(priceEl.textContent))]);
     }
   }

@@ -32,6 +32,9 @@ const price = s => (/^\d+\.\d+$/.test(s) ? Number(s) : null);
 //    last-5 figures. A price column is paired with the nearest name column that has the same number of rows.
 //    bet365 now shows only the first 6 players of a game until "Show more" is clicked; such games come back with
 //    collapsed:true so the importer can warn and hold back "completed".
+//  - layout C (seen 18 Nov 2026, readable class names again but new prefixes, e.g. gl-Market_General-pwidth40,
+//    srb-HScrollPlaceColumnMarket): a column is [header, cell, cell, ...] with the cells as direct children. Read by
+//    the same generic pairing as layout B; the active tab is marked by a "...selected" class and "Show more" is a div.
 //  - a To Be Booked list is elements holding a name leaf + a price (a leaf, or nested in the pair's second child in
 //    layout B), when no table was found on the page
 // Returns { tab, games: [{ title, headers, rows: { bet365Name: [prices] }, collapsed? }] }
@@ -40,6 +43,11 @@ export function parseBet365Html(htmlText, Parser) {
   let tab = '';
   for (const b of doc.querySelectorAll('button[aria-selected="true"]')) {
     const t = clean(b.textContent).replace(/^(.+?)\1$/, '$1'); // label is repeated in two spans
+    if (TABS.includes(t)) { tab = t; break; }
+  }
+  // layout C has no aria-selected: the active tab is an element whose class name says "selected"
+  if (!tab) for (const b of doc.querySelectorAll('[class*="elected"]')) {
+    const t = clean(b.textContent).replace(/^(.+?)\1$/, '$1');
     if (TABS.includes(t)) { tab = t; break; }
   }
   const isTitle = s => / v /.test(s) && s.length < 80 && !/\d\.\d/.test(s);
@@ -66,7 +74,7 @@ export function parseBet365Html(htmlText, Parser) {
   const holdsTitle = el => titleEls.some(t => el.contains(t));
   const isCollapsed = el => {
     let card = el; while (card.parentElement && !holdsTitle(card)) card = card.parentElement;
-    return [...card.querySelectorAll('button')].some(b => /^show more$/i.test(clean(b.textContent)));
+    return [...card.querySelectorAll('button,div,span,a')].some(b => !b.children.length && /^show more$/i.test(clean(b.textContent)));
   };
 
   // ladder / score-assist tables
@@ -96,20 +104,29 @@ export function parseBet365Html(htmlText, Parser) {
     }
   }
 
-  // layout B: generic [header, cells] columns (no pwidth classes)
+  // layouts B and C: generic header + cells columns, no reliance on class names
   if (!order.length) {
-    const kidsText = list => [...list.children].map(c => clean(c.textContent));
     const letters = t => (t.match(/[A-Za-z\u00C0-\u024F]/g) || []).length;
     const priceCols = [], nameCols = [];
-    for (const el of doc.querySelectorAll('div')) {
-      if (el.children.length !== 2) continue;
-      const [h, list] = el.children; const n = list.children.length;
-      if (!n || n > 150) continue;
-      const head = clean(h.textContent); if (head.length > 40) continue;
-      const texts = kidsText(list);
+    const classify = (el, head, cells) => {
+      const n = cells.length; if (n < 2 || n > 150 || head.length > 40) return false;
+      const texts = cells.map(c => clean(c.textContent));
       if (texts.every(t => t === '' || price(t) != null)) {
-        if (/^\d+\+$/.test(head) || texts.some(t => t !== '')) priceCols.push({ el, head, texts, n });
-      } else if (texts.every(t => letters(t) >= 2 && t.length < 80 && !isTitle(t))) nameCols.push({ el, rows: [...list.children], n });
+        if (!/^\d+\+$/.test(head) && !texts.some(t => t !== '')) return false;
+        priceCols.push({ el, head, texts, n }); return true;
+      }
+      if (texts.every(t => letters(t) >= 2 && t.length < 80 && !isTitle(t))) { nameCols.push({ el, rows: cells, n }); return true; }
+      return false;
+    };
+    for (const el of doc.querySelectorAll('div')) {
+      const kids = [...el.children]; if (kids.length < 2) continue;
+      const head = clean(kids[0].textContent);
+      // shape 1 (layout B): [header, list of cells]; shape 2 (layout C): [header, cell, cell, ...]
+      if (kids.length === 2 && kids[1].children.length && classify(el, head, [...kids[1].children])) continue;
+      // the header must not be just another cell: not a price, and styled differently from every cell
+      const hc = kids[0].className;
+      if (price(head) != null || kids.slice(1).some(k => k.className === hc)) continue;
+      classify(el, head, kids.slice(1));
     }
     const tables = new Map(); const orphans = [];
     for (const pc of priceCols) {
